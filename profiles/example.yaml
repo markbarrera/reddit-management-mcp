@@ -1,0 +1,119 @@
+# Reddit Intelligence MCP — Brand Profile (example)
+#
+# Copy this file and edit it for your brand. Point the server at it by setting
+#   MCP_PROFILE_PATH=/path/to/your-profile.yaml
+#
+# Each section has inline notes so you don't need to read code to fill this in.
+
+# ─── Your brand ────────────────────────────────────────────────────────────
+brand:
+  name: "Acme Widgets"                # Full brand name, used in prompts
+  slug: "acme"                        # Short lowercase ID — used as key in sentiment JSON
+  industry_context: "DIY hardware tools for home hobbyists"  # One-line what-you-do
+  url: "https://www.acmewidgets.com"
+
+# ─── Defaults for scraping ─────────────────────────────────────────────────
+defaults:
+  # Subreddits you want to monitor by default. The reddit_ingest tool uses
+  # these if no subreddits are passed explicitly.
+  subreddits:
+    - DIY
+    - woodworking
+    - homeimprovement
+    - BuyItForLife
+
+  # Keywords searched across all of Reddit.
+  keywords:
+    - "best cordless drill"
+    - "Acme Widgets"
+    - "Bosch vs DeWalt"
+
+  # Named competitors. Used for narrative mapping and prompt context.
+  competitors:
+    - Bosch
+    - DeWalt
+    - Milwaukee
+    - Ryobi
+
+  # Platforms your customers sell on / use — shown to the classifier so it
+  # can tag threads appropriately. Optional; remove this key if irrelevant.
+  supported_platforms: []
+
+# ─── Classification taxonomy ───────────────────────────────────────────────
+# The classifier is forced to pick values from these lists. Pick categories
+# that actually matter for your decision-making.
+taxonomy:
+  topics:
+    - product_comparison
+    - recommendation_request
+    - how_to
+    - complaint
+    - general_discussion
+    - industry_news
+
+  personas:
+    - diy_hobbyist
+    - professional_tradesperson
+    - first_time_buyer
+    - gift_shopper
+
+  thread_templates:
+    - what_i_learned
+    - honest_comparison
+    - resource
+    - myth_busting
+    - ama
+
+  response_variants:
+    - peer_mode           # sound like a fellow user
+    - expert_mode         # show expertise
+    - helper_mode         # answer their question directly
+    - corrective_mode     # correct a misconception
+
+# ─── Grounding documents ───────────────────────────────────────────────────
+# These keys are looked up in the grounding_docs table at prompt time and
+# injected into every classification / participation / origination prompt.
+# Seed these by running: python scripts/seed_grounding.py grounding/
+grounding_doc_keys:
+  - competitive_positioning
+  - voice_tone
+  - icp_personas
+  - product_messaging
+  - engagement_rules
+  - content_strategy
+
+# Fields the participation-guide prompt must answer in narrative_check.
+# Use these to enforce that drafts address your specific messaging pillars.
+narrative_check_fields:
+  - addresses_customer_question
+  - stays_on_brand_voice
+  - avoids_hard_sell
+
+# ─── Compliance (optional but recommended) ─────────────────────────────────
+compliance:
+  guardrails:
+    - "Never make performance claims not substantiated in product_messaging doc."
+    - "Never name specific competitor pricing."
+  # If set, this string MUST appear verbatim in every draft reply that
+  # touches pricing, financing, eligibility, etc. Leave empty to disable.
+  required_disclaimer: ""
+
+# ─── Optional integrations ─────────────────────────────────────────────────
+integrations:
+  citation_tracker:
+    enabled: false
+    # Supported providers: peec, profound, custom
+    provider: ""
+
+# ─── Server identity ───────────────────────────────────────────────────────
+# The MCP server name exposed over the protocol. Defaults to "<slug>_reddit_mcp".
+# server_name: acme_reddit_mcp
+
+# ─── Prompt overrides (optional) ───────────────────────────────────────────
+# If you want to rewrite the role-intro line for any prompt, set it here.
+# Leave commented out to use the default ("You are classifying a Reddit
+# thread for {brand.name}, which provides {brand.industry_context}.").
+prompts: {}
+  # classifier_role: "You are analyzing a Reddit thread for Acme's research team."
+  # participation_role: "You are an expert Reddit strategist for Acme."
+  # origination_role: "You are a Reddit content strategist for Acme."

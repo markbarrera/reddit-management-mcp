@@ -1,8 +1,29 @@
-"""Osano Reddit Intelligence MCP Server.
+"""Reddit Intelligence MCP Server.
 
-Provides tools for Reddit scraping, classification, participation guidance,
-thread origination, narrative analysis, and language mining — all grounded
-in Osano's brand knowledge and competitive strategy.
+Brand behavior is defined by the active profile (see profile.py and
+profiles/*.yaml). This file contains no brand-specific strings.
+
+Tools:
+  Core:
+    - reddit_ingest            scrape subreddits + keyword searches
+    - reddit_ingest_urls       ingest specific URLs, optionally with
+                               citation-tracker metadata (peec, Profound, etc.)
+    - reddit_search            filter stored threads
+    - reddit_classify          Claude classification with grounding docs
+    - reddit_stats             aggregate statistics
+  Intelligence:
+    - reddit_participation_guide   draft replies with grounding + feedback learning
+    - reddit_thread_suggest        originate new threads for rank/citation
+    - reddit_narrative_map         competitor narrative analysis
+    - reddit_language_mine         buyer-language extraction
+    - reddit_citation_gaps         threads AI cites where brand is missing
+  Grounding:
+    - reddit_store_grounding_doc / reddit_get_grounding_doc / reddit_list_grounding_docs
+  Learning:
+    - reddit_log_feedback          record original vs final + reason
+    - reddit_feedback_history      review past edits
+  Profile:
+    - reddit_profile_info          introspect active brand profile
 """
 
 import json
@@ -15,16 +36,20 @@ from db import (
     upsert_thread, get_thread, search_threads, get_stats,
     get_unclassified_threads, store_grounding_doc, get_grounding_doc,
     list_grounding_docs, start_scrape_run, complete_scrape_run,
+    record_citation, get_citation_gaps,
+    log_feedback, get_feedback_history,
 )
 from reddit_scraper import RedditScraper
 from classifier import (
     classify_batch, generate_participation_guide, generate_thread_suggestions,
 )
+from profile import get_profile
 
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP("osano_reddit_mcp")
+_profile = get_profile()
+mcp = FastMCP(_profile.server_name())
 
 
 # ============================================
@@ -50,20 +75,16 @@ async def reddit_ingest(
 ) -> str:
     """Scrape Reddit threads from subreddits and keyword searches.
 
-    Uses Reddit's public JSON endpoints (no API key needed).
-    Stores threads in database and queues them for classification.
+    Uses Reddit's public RSS feeds (no auth) or OAuth if credentials set.
+    Stores threads in the database and queues them for classification.
 
     Args:
-        subreddits: List of subreddits to scrape (e.g. ["privacy", "gdpr"]).
-            Defaults to: privacy, gdpr, legaltech, compliance, webdev
-        keywords: Keywords to search across all of Reddit (e.g. ["Osano", "cookie consent"]).
-            Defaults to: consent management, cookie consent, privacy platform, Osano, OneTrust
-        time_filter: Time range for search — hour, day, week, month, year, all
+        subreddits: Subreddits to scrape. Defaults to profile's default_subreddits.
+        keywords: Keywords to search across all of Reddit.
+            Defaults to profile's default_keywords.
+        time_filter: hour, day, week, month, year, all
         limit: Max threads per subreddit/keyword source (1-100)
-        fetch_comments: Whether to fetch full comment trees (slower but richer data)
-
-    Returns:
-        JSON summary with thread counts, new vs updated, and sample thread titles
+        fetch_comments: Fetch full comment trees (slower but richer data)
     """
     scraper = RedditScraper()
     run_id = start_scrape_run(subreddits or [], keywords or [])
@@ -88,7 +109,6 @@ async def reddit_ingest(
 
         complete_scrape_run(run_id, len(threads), new_count)
 
-        # Sample titles for response
         sample = [
             {"title": t["title"][:80], "subreddit": t["subreddit"], "score": t["score"]}
             for t in sorted(threads, key=lambda x: x.get("score", 0), reverse=True)[:10]
@@ -125,36 +145,38 @@ async def reddit_ingest(
 async def reddit_ingest_urls(
     url_data: list[dict],
     fetch_comments: bool = True,
+    citation_provider: Optional[str] = None,
 ) -> str:
-    """Ingest specific Reddit threads by URL, with optional peec.ai citation metadata.
+    """Ingest specific Reddit threads by URL, optionally with citation metadata.
 
-    Use this to ingest threads from your monthly peec.ai export — threads that
-    AI models are actively citing when answering privacy software queries.
+    Use this to ingest threads from an AI-citation-tracking export
+    (peec.ai, Profound, etc.) — threads where AI models are citing sources
+    when answering queries in your category.
 
-    Each item in url_data must have a 'url' key, and can optionally include:
-      - citation_count: int — how many times AI cited this thread (from peec.ai 'Used total')
-      - ai_mentioned: str — 'Yes', 'No', or 'Unknown' (from peec.ai 'Mentioned')
-      - competitors: str or list — competitor names mentioned (from peec.ai 'Mentions')
-
-    Example url_data:
-      [
-        {"url": "https://www.reddit.com/r/webdev/comments/abc123/...", "citation_count": 97, "ai_mentioned": "No", "competitors": "OneTrust, Cookiebot"},
-        {"url": "https://www.reddit.com/r/gdpr/comments/xyz789/...", "citation_count": 65, "ai_mentioned": "No"}
-      ]
+    Each item in url_data must have a 'url' key, optionally:
+      - citation_count: int    — how many times AI cited this thread
+      - brand_mentioned: str   — 'Yes', 'No', or 'Unknown'
+      - competitors_mentioned: str or list — competitor names
+      - (alias) ai_mentioned, peec_competitors are also accepted
 
     Args:
-        url_data: List of dicts — each requires 'url', optionally 'citation_count',
-            'ai_mentioned', and 'competitors'
-        fetch_comments: Whether to include the comment tree (default True)
-
-    Returns:
-        JSON summary with ingested count, failures, and high-priority gaps found
+        url_data: List of dicts; each requires 'url', optionally citation fields
+        fetch_comments: Include the comment tree (default True)
+        citation_provider: Override provider tag (e.g. 'peec', 'profound').
+            Defaults to the profile's configured citation_tracker.provider.
     """
+    profile = get_profile()
+    provider = (
+        citation_provider
+        or profile.citation_tracker_provider
+        or ("peec" if profile.citation_tracker_enabled else "unknown")
+    )
+
     scraper = RedditScraper()
     new_count = 0
     updated_count = 0
     failed = []
-    high_priority_gaps = []  # ai_mentioned=No + high citation_count
+    high_priority_gaps = []
 
     try:
         for item in url_data:
@@ -168,26 +190,14 @@ async def reddit_ingest_urls(
                 if not thread:
                     failed.append({"url": url, "error": "could not fetch or parse"})
                     continue
-
                 if not fetch_comments:
                     thread["comments"] = []
 
-                # Attach peec.ai metadata
                 citation_count = item.get("citation_count")
-                ai_mentioned = item.get("ai_mentioned")
-                competitors = item.get("competitors")
-
-                if citation_count is not None:
-                    thread["citation_count"] = int(citation_count)
-                if ai_mentioned is not None:
-                    thread["ai_mentioned"] = str(ai_mentioned)
-                if competitors is not None:
-                    if isinstance(competitors, str):
-                        thread["peec_competitors"] = [
-                            c.strip() for c in competitors.split(",") if c.strip()
-                        ]
-                    else:
-                        thread["peec_competitors"] = competitors
+                brand_mentioned = item.get("brand_mentioned") or item.get("ai_mentioned")
+                competitors = item.get("competitors_mentioned") or item.get("competitors") or item.get("peec_competitors")
+                if isinstance(competitors, str):
+                    competitors = [c.strip() for c in competitors.split(",") if c.strip()]
 
                 is_new = upsert_thread(thread)
                 if is_new:
@@ -195,9 +205,18 @@ async def reddit_ingest_urls(
                 else:
                     updated_count += 1
 
-                # Flag high-priority gaps: AI not citing Osano + highly cited thread
+                if citation_count is not None or brand_mentioned or competitors:
+                    record_citation(
+                        thread_id=thread["thread_id"],
+                        provider=provider,
+                        citation_count=int(citation_count) if citation_count is not None else None,
+                        brand_mentioned=str(brand_mentioned) if brand_mentioned is not None else None,
+                        competitors_mentioned=competitors,
+                        raw_metadata=item,
+                    )
+
                 if (
-                    str(ai_mentioned or "").lower() in ("no", "false", "0")
+                    str(brand_mentioned or "").lower() in ("no", "false", "0")
                     and (citation_count or 0) >= 30
                 ):
                     high_priority_gaps.append({
@@ -211,7 +230,6 @@ async def reddit_ingest_urls(
             except Exception as e:
                 logger.error(f"Error ingesting {url}: {e}")
                 failed.append({"url": url, "error": str(e)})
-
     finally:
         scraper.close()
 
@@ -220,12 +238,13 @@ async def reddit_ingest_urls(
         "new_threads": new_count,
         "updated_threads": updated_count,
         "failed": len(failed),
+        "citation_provider": provider,
         "high_priority_gaps": sorted(
             high_priority_gaps, key=lambda x: x["citation_count"], reverse=True
         ),
     }
     if failed:
-        result["failures"] = failed[:20]  # Cap to avoid huge responses
+        result["failures"] = failed[:20]
     return json.dumps(result, indent=2)
 
 
@@ -234,9 +253,7 @@ async def reddit_ingest_urls(
     annotations={
         "title": "Search Reddit Threads",
         "readOnlyHint": True,
-        "destructiveHint": False,
         "idempotentHint": True,
-        "openWorldHint": False,
     }
 )
 async def reddit_search(
@@ -249,35 +266,18 @@ async def reddit_search(
     time_range_days: Optional[int] = None,
     limit: int = 20,
 ) -> str:
-    """Search Reddit threads in the database with rich filtering.
-
-    Combines full-text search with structured classification filters.
-
-    Args:
-        query: Text search across thread titles, bodies, and comments
-        subreddit: Filter by subreddit name (without r/ prefix)
-        min_score: Minimum Reddit score (upvotes)
-        participation_priority: Filter by priority — urgent, high, medium, low, skip
-        participation_status: Filter by status — not_engaged, engaged, originated
-        has_competitor: Filter for threads mentioning a specific competitor
-        time_range_days: Only threads from last N days
-        limit: Max results (1-100)
-
-    Returns:
-        JSON array of matching threads with classification data
-    """
+    """Search stored Reddit threads with rich filtering."""
+    profile = get_profile()
     threads = search_threads(
-        query=query,
-        subreddit=subreddit,
-        min_score=min_score,
+        query=query, subreddit=subreddit, min_score=min_score,
         participation_priority=participation_priority,
         participation_status=participation_status,
-        has_competitor=has_competitor,
-        time_range_days=time_range_days,
+        has_competitor=has_competitor, time_range_days=time_range_days,
         limit=limit,
     )
 
     results = []
+    brand_key = profile.brand_slug
     for t in threads:
         entry = {
             "thread_id": t["thread_id"],
@@ -294,7 +294,10 @@ async def reddit_search(
                 cls = json.loads(t["classification"])
                 entry["topic"] = cls.get("topic")
                 entry["sentiment"] = cls.get("sentiment", {}).get("overall")
-                entry["osano_sentiment"] = cls.get("sentiment", {}).get("osano")
+                entry["brand_sentiment"] = (
+                    cls.get("sentiment", {}).get(brand_key)
+                    or cls.get("sentiment", {}).get("osano")  # legacy fallback
+                )
                 entry["competitors"] = [
                     c["name"] for c in cls.get("entities", {}).get("competitors", [])
                 ]
@@ -311,7 +314,6 @@ async def reddit_search(
     annotations={
         "title": "Classify Reddit Threads",
         "readOnlyHint": False,
-        "destructiveHint": False,
         "idempotentHint": False,
         "openWorldHint": True,
     }
@@ -320,19 +322,7 @@ async def reddit_classify(
     thread_ids: Optional[list[str]] = None,
     batch_size: int = 10,
 ) -> str:
-    """Classify Reddit threads using Claude with grounding docs.
-
-    Injects competitive_positioning, icp_personas, and geo_content_strategy
-    grounding docs into the classification prompt for strategically-aligned results.
-
-    Args:
-        thread_ids: Specific thread IDs to classify. If omitted, classifies
-            next batch of unclassified threads.
-        batch_size: Number of threads to classify (1-25). Ignored if thread_ids provided.
-
-    Returns:
-        JSON summary with classified count, topics, and priorities
-    """
+    """Classify Reddit threads using Claude with grounding docs from the active profile."""
     result = classify_batch(batch_size=batch_size, thread_ids=thread_ids)
     return json.dumps(result, indent=2)
 
@@ -342,25 +332,11 @@ async def reddit_classify(
     annotations={
         "title": "Reddit Intelligence Statistics",
         "readOnlyHint": True,
-        "destructiveHint": False,
         "idempotentHint": True,
-        "openWorldHint": False,
     }
 )
-async def reddit_stats(
-    subreddit: Optional[str] = None,
-) -> str:
-    """Get statistics about Reddit data in the database.
-
-    Shows total threads, breakdown by subreddit, classification status,
-    participation priorities, and engagement status.
-
-    Args:
-        subreddit: Optional filter to show stats for a specific subreddit
-
-    Returns:
-        JSON with aggregate statistics
-    """
+async def reddit_stats(subreddit: Optional[str] = None) -> str:
+    """Aggregate statistics about stored Reddit data."""
     stats = get_stats(subreddit=subreddit)
     return json.dumps(stats, indent=2)
 
@@ -374,31 +350,14 @@ async def reddit_stats(
     annotations={
         "title": "Generate Participation Guide",
         "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": False,
         "openWorldHint": True,
     }
 )
-async def reddit_participation_guide(
-    thread_id: str,
-) -> str:
-    """Generate a grounded participation recommendation for a Reddit thread.
+async def reddit_participation_guide(thread_id: str) -> str:
+    """Generate a participation recommendation for a thread.
 
-    Loads ALL 6 grounding docs (competitive positioning, voice/tone,
-    engagement rules, product messaging, ICP personas, GEO strategy)
-    and generates:
-    - Draft response(s) in authentic Reddit voice
-    - Narrative check against GEO strategy
-    - Competitor response protocol
-    - Suggested Osano content to link
-    - Do/don't guidance
-    - Timing assessment
-
-    Args:
-        thread_id: Reddit thread ID to generate guidance for
-
-    Returns:
-        JSON with full participation recommendation
+    Injects grounding docs + recent human edits (from reddit_log_feedback)
+    so drafts improve week over week.
     """
     result = generate_participation_guide(thread_id)
     return json.dumps(result, indent=2)
@@ -409,8 +368,6 @@ async def reddit_participation_guide(
     annotations={
         "title": "Suggest Thread Origination",
         "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": False,
         "openWorldHint": True,
     }
 )
@@ -420,27 +377,11 @@ async def reddit_thread_suggest(
     template: Optional[str] = None,
     limit: int = 5,
 ) -> str:
-    """Generate thread origination suggestions for Reddit.
+    """Generate thread origination suggestions.
 
-    Creates fully-drafted thread suggestions designed to rank in Google,
-    surface in Reddit Answers, and feed LLM training data with accurate
-    Osano positioning.
-
-    Templates: what_i_learned, honest_comparison, regulatory_explainer,
-    myth_busting, resource, ama
-
-    Args:
-        topic: Focus on a specific topic (e.g. "DSAR automation", "cookie consent")
-        persona: Target a specific ICP persona (e.g. "non_privacy_expert", "developer_implementer")
-        template: Use a specific thread template type
-        limit: Number of suggestions to generate (1-10)
-
-    Returns:
-        JSON array of thread suggestions with titles, body drafts, and scoring
+    Templates available are declared in the profile's taxonomy.thread_templates.
     """
-    suggestions = generate_thread_suggestions(
-        topic=topic, persona=persona, limit=limit,
-    )
+    suggestions = generate_thread_suggestions(topic=topic, persona=persona, limit=limit)
     return json.dumps(suggestions, indent=2)
 
 
@@ -449,35 +390,19 @@ async def reddit_thread_suggest(
     annotations={
         "title": "Build Competitive Narrative Map",
         "readOnlyHint": True,
-        "destructiveHint": False,
         "idempotentHint": True,
-        "openWorldHint": False,
     }
 )
-async def reddit_narrative_map(
-    competitor: Optional[str] = None,
-) -> str:
-    """Build competitive narrative analysis from Reddit conversations.
-
-    Analyzes classified threads to map dominant narratives about each brand,
-    sentiment distribution, and for Osano specifically, tracks target
-    narratives from the GEO strategy that aren't yet established.
-
-    Args:
-        competitor: Specific competitor to analyze (e.g. "OneTrust", "Ketch").
-            If omitted, maps all competitors found in threads.
-
-    Returns:
-        JSON with narrative maps per brand including frequency and trends
-    """
-    # Pull all classified threads with competitor mentions
-    filter_comp = competitor if competitor else None
-    threads = search_threads(has_competitor=filter_comp, limit=100)
+async def reddit_narrative_map(competitor: Optional[str] = None) -> str:
+    """Build competitive narrative analysis from classified Reddit conversations."""
+    threads = search_threads(has_competitor=competitor, limit=100)
 
     if not threads:
-        return json.dumps({"message": "No classified threads with competitor mentions found. Run reddit_ingest and reddit_classify first."})
+        return json.dumps({
+            "message": "No classified threads with competitor mentions found. "
+                       "Run reddit_ingest and reddit_classify first."
+        })
 
-    # Aggregate narratives from classifications
     narrative_data = {}
     for t in threads:
         if not t.get("classification"):
@@ -494,7 +419,6 @@ async def reddit_narrative_map(
                 narrative_data[name]["sentiments"].append(comp.get("sentiment", "neutral"))
                 if comp.get("context"):
                     narrative_data[name]["contexts"].append(comp["context"])
-            # Collect pain points
             for pp in cls.get("pain_points", []):
                 for comp_name in narrative_data:
                     if comp_name.lower() in t.get("full_text", "").lower():
@@ -502,15 +426,12 @@ async def reddit_narrative_map(
         except json.JSONDecodeError:
             continue
 
-    # Summarize
     result = {}
     for name, data in narrative_data.items():
         sentiments = data["sentiments"]
         result[name] = {
             "total_mentions": data["mentions"],
-            "sentiment_distribution": {
-                s: sentiments.count(s) for s in set(sentiments)
-            },
+            "sentiment_distribution": {s: sentiments.count(s) for s in set(sentiments)},
             "sample_contexts": data["contexts"][:10],
             "associated_pain_points": list(set(data["pain_points"]))[:10],
         }
@@ -523,34 +444,20 @@ async def reddit_narrative_map(
     annotations={
         "title": "Mine Buyer Language Patterns",
         "readOnlyHint": True,
-        "destructiveHint": False,
         "idempotentHint": True,
-        "openWorldHint": False,
     }
 )
 async def reddit_language_mine(
     persona: Optional[str] = None,
     topic: Optional[str] = None,
 ) -> str:
-    """Extract actual buyer language patterns from Reddit threads.
-
-    Organized by persona, returns pain descriptions, evaluation criteria,
-    objections, and trigger events — all in the exact words buyers use.
-
-    Args:
-        persona: Filter by ICP persona (e.g. "non_privacy_expert", "developer_implementer")
-        topic: Filter by topic keyword
-
-    Returns:
-        JSON with language patterns organized by category
-    """
+    """Extract buyer language patterns from classified threads."""
     threads = search_threads(query=topic, limit=100)
-
     if not threads:
-        return json.dumps({"message": "No classified threads found. Run reddit_ingest and reddit_classify first."})
+        return json.dumps({"message": "No classified threads found."})
 
-    all_pain_points = []
-    all_buyer_language = []
+    all_pain = []
+    all_lang = []
     persona_language = {}
 
     for t in threads:
@@ -559,38 +466,58 @@ async def reddit_language_mine(
         try:
             cls = json.loads(t["classification"])
             author_persona = cls.get("personas", {}).get("thread_author", "unknown")
-
             if persona and author_persona != persona:
                 continue
-
             if author_persona not in persona_language:
                 persona_language[author_persona] = {
                     "pain_points": [], "buyer_phrases": [], "thread_count": 0,
                 }
             persona_language[author_persona]["thread_count"] += 1
-            persona_language[author_persona]["pain_points"].extend(
-                cls.get("pain_points", [])
-            )
-            persona_language[author_persona]["buyer_phrases"].extend(
-                cls.get("buyer_language", [])
-            )
-            all_pain_points.extend(cls.get("pain_points", []))
-            all_buyer_language.extend(cls.get("buyer_language", []))
+            persona_language[author_persona]["pain_points"].extend(cls.get("pain_points", []))
+            persona_language[author_persona]["buyer_phrases"].extend(cls.get("buyer_language", []))
+            all_pain.extend(cls.get("pain_points", []))
+            all_lang.extend(cls.get("buyer_language", []))
         except json.JSONDecodeError:
             continue
 
-    # Deduplicate
     for p in persona_language.values():
         p["pain_points"] = list(set(p["pain_points"]))[:20]
         p["buyer_phrases"] = list(set(p["buyer_phrases"]))[:20]
 
-    result = {
+    return json.dumps({
         "total_threads_analyzed": len(threads),
         "by_persona": persona_language,
-        "all_pain_points": list(set(all_pain_points))[:30],
-        "all_buyer_phrases": list(set(all_buyer_language))[:30],
+        "all_pain_points": list(set(all_pain))[:30],
+        "all_buyer_phrases": list(set(all_lang))[:30],
+    }, indent=2)
+
+
+@mcp.tool(
+    name="reddit_citation_gaps",
+    annotations={
+        "title": "Find AI-Citation Content Gaps",
+        "readOnlyHint": True,
+        "idempotentHint": True,
     }
-    return json.dumps(result, indent=2)
+)
+async def reddit_citation_gaps(
+    provider: Optional[str] = None,
+    min_count: int = 30,
+    limit: int = 50,
+) -> str:
+    """Find Reddit threads where AI models cite competitors but NOT the brand.
+
+    Requires citation data imported via reddit_ingest_urls. These are the
+    highest-leverage threads to either comment on or counter with originated
+    threads of your own.
+
+    Args:
+        provider: Filter by tracker source (e.g. 'peec', 'profound')
+        min_count: Minimum AI citation count to include
+        limit: Max results
+    """
+    gaps = get_citation_gaps(provider=provider, min_count=min_count, limit=limit)
+    return json.dumps({"count": len(gaps), "gaps": gaps}, indent=2)
 
 
 # ============================================
@@ -602,9 +529,7 @@ async def reddit_language_mine(
     annotations={
         "title": "Store Grounding Document",
         "readOnlyHint": False,
-        "destructiveHint": False,
         "idempotentHint": True,
-        "openWorldHint": False,
     }
 )
 async def reddit_store_grounding_doc(
@@ -616,19 +541,9 @@ async def reddit_store_grounding_doc(
 ) -> str:
     """Store a grounding document for classification and response generation.
 
-    Grounding docs are reference documents (competitive positioning, voice/tone,
-    product messaging, ICP definitions, etc.) that get injected into Claude prompts
-    so analysis is grounded in Osano's actual standards.
-
-    Args:
-        doc_key: Unique key (e.g. 'competitive_positioning', 'voice_tone')
-        title: Human-readable title
-        content: Full document text
-        doc_type: Type — competitive, product, voice_tone, icp, reference
-        source_url: Optional source URL
-
-    Returns:
-        Confirmation with key and size
+    Common doc_keys: competitive_positioning, voice_tone, icp_personas,
+    product_messaging, engagement_rules, content_strategy. The profile's
+    grounding_doc_keys controls which get injected into prompts.
     """
     store_grounding_doc(doc_key, title, content, doc_type, source_url)
     return json.dumps({
@@ -644,22 +559,11 @@ async def reddit_store_grounding_doc(
     annotations={
         "title": "Get Grounding Document",
         "readOnlyHint": True,
-        "destructiveHint": False,
         "idempotentHint": True,
-        "openWorldHint": False,
     }
 )
-async def reddit_get_grounding_doc(
-    doc_key: str,
-) -> str:
-    """Retrieve a grounding document by key.
-
-    Args:
-        doc_key: Document key (e.g. 'competitive_positioning', 'voice_tone')
-
-    Returns:
-        Document content or error if not found
-    """
+async def reddit_get_grounding_doc(doc_key: str) -> str:
+    """Retrieve a grounding document by key."""
     content = get_grounding_doc(doc_key)
     if content:
         return content
@@ -671,16 +575,113 @@ async def reddit_get_grounding_doc(
     annotations={
         "title": "List Grounding Documents",
         "readOnlyHint": True,
-        "destructiveHint": False,
         "idempotentHint": True,
-        "openWorldHint": False,
     }
 )
 async def reddit_list_grounding_docs() -> str:
-    """List all stored grounding documents.
-
-    Returns:
-        JSON array of documents with keys, titles, types, and sizes
-    """
+    """List all stored grounding documents."""
     docs = list_grounding_docs()
     return json.dumps(docs, indent=2)
+
+
+# ============================================
+# Feedback / Learning Tools
+# ============================================
+
+@mcp.tool(
+    name="reddit_log_feedback",
+    annotations={
+        "title": "Log Edit Feedback",
+        "readOnlyHint": False,
+        "idempotentHint": False,
+    }
+)
+async def reddit_log_feedback(
+    tool_name: str,
+    original_output: str,
+    final_version: str,
+    reason: str,
+    thread_id: Optional[str] = None,
+    user_name: Optional[str] = None,
+    outcome: Optional[str] = None,
+) -> str:
+    """Record what was actually used vs what the MCP drafted, and why.
+
+    These logs are retrieved as few-shot examples for future draft generation,
+    making the system learn team preferences over time.
+
+    Args:
+        tool_name: Which tool produced the original (e.g. 'reddit_participation_guide')
+        original_output: Exact text of the original draft
+        final_version: The version that was actually used/posted
+        reason: WHY it was changed (e.g. "too formal", "removed CTA", "added caveat about eligibility")
+        thread_id: Related thread, if applicable
+        user_name: Team member who edited (e.g. 'mark'). Omit for anonymous.
+        outcome: Optional post-outcome note (e.g. "+12 upvotes", "deleted by mods")
+    """
+    feedback_id = log_feedback(
+        tool_name=tool_name,
+        original_output=original_output,
+        final_version=final_version,
+        reason=reason,
+        thread_id=thread_id,
+        user_name=user_name,
+        outcome=outcome,
+    )
+    return json.dumps({"logged": True, "feedback_id": feedback_id})
+
+
+@mcp.tool(
+    name="reddit_feedback_history",
+    annotations={
+        "title": "Review Feedback History",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+    }
+)
+async def reddit_feedback_history(
+    tool_name: Optional[str] = None,
+    user_name: Optional[str] = None,
+    subreddit: Optional[str] = None,
+    limit: int = 50,
+) -> str:
+    """Review past edit feedback. Use this to audit what the team has been
+    changing, spot patterns, and decide whether grounding docs need updating."""
+    rows = get_feedback_history(tool_name=tool_name, user_name=user_name, subreddit=subreddit, limit=limit)
+    return json.dumps({"count": len(rows), "feedback": rows}, indent=2)
+
+
+# ============================================
+# Profile Introspection
+# ============================================
+
+@mcp.tool(
+    name="reddit_profile_info",
+    annotations={
+        "title": "Active Brand Profile",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+    }
+)
+async def reddit_profile_info() -> str:
+    """Return the active brand profile (brand name, defaults, taxonomy, compliance).
+    Useful for verifying which profile is loaded and what the server is
+    configured to focus on."""
+    p = get_profile()
+    return json.dumps({
+        "source_path": str(p.source_path),
+        "brand": p.brand,
+        "defaults": p.defaults,
+        "taxonomy": p.taxonomy,
+        "grounding_doc_keys": p.grounding_doc_keys,
+        "compliance": {
+            "disclaimer_required": p.disclaimer_required,
+            "guardrails_count": len(p.compliance_guardrails),
+        },
+        "integrations": {
+            "citation_tracker": {
+                "enabled": p.citation_tracker_enabled,
+                "provider": p.citation_tracker_provider,
+            },
+        },
+    }, indent=2)

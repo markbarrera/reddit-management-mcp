@@ -1,4 +1,8 @@
-"""Reddit scraper using RSS feeds (no auth required) with JSON for comment fetching."""
+"""Reddit scraper using RSS feeds (no auth required) with JSON for comment fetching.
+
+Defaults (subreddits, keywords, user-agent) come from the active brand
+profile — see profile.py and profiles/*.yaml.
+"""
 
 import os
 import re
@@ -10,6 +14,8 @@ import xml.etree.ElementTree as ET
 from typing import Optional
 from datetime import datetime, timezone
 
+from profile import get_profile
+
 ATOM_NS = "{http://www.w3.org/2005/Atom}"
 
 logger = logging.getLogger(__name__)
@@ -19,36 +25,11 @@ MIN_REQUEST_INTERVAL = 2.0  # seconds between requests
 MAX_RETRIES = 3
 BACKOFF_FACTOR = 2.0
 
-# Default configuration
-DEFAULT_SUBREDDITS = ["privacy", "gdpr", "legaltech", "compliance", "webdev"]
-DEFAULT_KEYWORDS = [
-    "consent management", "cookie consent", "privacy platform",
-    "Osano", "OneTrust", "Cookiebot", "GDPR compliance", "CCPA compliance",
-]
-DEFAULT_USER_AGENT = "osano-reddit-intelligence/1.0 (content research)"
-
 # Reddit OAuth token endpoint
 REDDIT_TOKEN_URL = "https://www.reddit.com/api/v1/access_token"
 # Base URL: use oauth.reddit.com when authenticated, www.reddit.com otherwise
 REDDIT_PUBLIC_BASE = "https://www.reddit.com"
 REDDIT_OAUTH_BASE = "https://oauth.reddit.com"
-
-BRAND_KEYWORDS = [
-    "osano", "onetrust", "cookiebot", "ketch privacy", "trustarc",
-    "securiti", "bigid", "usercentrics", "didomi", "transcend",
-]
-PRODUCT_KEYWORDS = [
-    "consent management platform", "CMP", "cookie consent",
-    "privacy platform", "DSAR tool", "data mapping tool",
-]
-REGULATORY_KEYWORDS = [
-    "GDPR compliance", "CCPA compliance", "state privacy law",
-    "privacy fine", "data privacy regulation",
-]
-PROBLEM_KEYWORDS = [
-    "privacy compliance help", "cookie consent requirements",
-    "do I need cookie consent", "privacy policy requirements",
-]
 
 
 class RedditScraper:
@@ -66,10 +47,13 @@ class RedditScraper:
       4. Copy the client ID (below app name) and client secret
     """
 
-    def __init__(self, user_agent: str = DEFAULT_USER_AGENT):
+    def __init__(self, user_agent: Optional[str] = None):
         self._last_request_time = 0.0
         self._access_token: Optional[str] = None
         self._token_expires: float = 0.0
+
+        profile = get_profile()
+        default_ua = f"{profile.brand_slug}-reddit-mcp/1.0 (content research)"
 
         # Check for OAuth credentials
         client_id = os.environ.get("REDDIT_CLIENT_ID")
@@ -85,12 +69,12 @@ class RedditScraper:
             self._reddit_password = password
             self._base_url = REDDIT_OAUTH_BASE
             # Reddit requires username in user agent for OAuth apps
-            self.user_agent = f"script:osano-reddit-mcp:1.0 (by /u/{username})"
+            self.user_agent = f"script:{profile.brand_slug}-reddit-mcp:1.0 (by /u/{username})"
             logger.info(f"Reddit OAuth enabled — user: u/{username}")
         else:
             self._oauth_enabled = False
             self._base_url = REDDIT_PUBLIC_BASE
-            self.user_agent = user_agent
+            self.user_agent = user_agent or default_ua
             logger.warning(
                 "No Reddit OAuth credentials found (REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, "
                 "REDDIT_USERNAME, REDDIT_PASSWORD). Using public API — may be blocked from "
@@ -498,8 +482,9 @@ class RedditScraper:
         Returns:
             Tuple of (threads list, errors list)
         """
-        subreddits = subreddits or DEFAULT_SUBREDDITS
-        keywords = keywords or DEFAULT_KEYWORDS
+        profile = get_profile()
+        subreddits = subreddits or profile.default_subreddits
+        keywords = keywords or profile.default_keywords
 
         seen_ids = set()
         all_threads = []

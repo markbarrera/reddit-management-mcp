@@ -1,4 +1,7 @@
-"""Database module for Reddit Intelligence MCP."""
+"""Database module for the Reddit Intelligence MCP.
+
+Schema is brand-neutral. Brand-specific behavior is driven by profile.yaml.
+"""
 
 import json
 import sqlite3
@@ -13,7 +16,6 @@ DB_PATH = os.environ.get("REDDIT_DB_PATH", "reddit_intelligence.db")
 
 
 def get_db() -> sqlite3.Connection:
-    """Get a database connection."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
@@ -22,7 +24,7 @@ def get_db() -> sqlite3.Connection:
 
 
 def init_db():
-    """Initialize the database schema."""
+    """Initialize the database schema (idempotent)."""
     conn = get_db()
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS reddit_threads (
@@ -40,26 +42,20 @@ def init_db():
             created_utc REAL DEFAULT 0,
             scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
-            -- Full comment tree as JSON
             comments_json TEXT DEFAULT '[]',
-
-            -- Combined searchable text
             full_text TEXT DEFAULT '',
             word_count INTEGER DEFAULT 0,
 
-            -- Classification (populated by classifier)
             classification TEXT,
             personas TEXT,
             pain_points TEXT,
             language_mining TEXT,
-            geo_signals TEXT,
+            signals TEXT,
 
-            -- Action tracking
             participation_status TEXT DEFAULT 'not_engaged',
             participation_priority TEXT DEFAULT 'unscored',
             participation_notes TEXT,
 
-            -- Embedding for vector search
             embedding BLOB
         );
 
@@ -90,20 +86,64 @@ def init_db():
             threads_new INTEGER DEFAULT 0,
             status TEXT DEFAULT 'running'
         );
+
+        -- Provider-agnostic citation tracking (peec.ai, Profound, etc.)
+        CREATE TABLE IF NOT EXISTS citation_tracking (
+            thread_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            citation_count INTEGER DEFAULT 0,
+            brand_mentioned TEXT DEFAULT 'unknown',
+            competitors_mentioned TEXT,
+            raw_metadata TEXT,
+            imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (thread_id, provider),
+            FOREIGN KEY (thread_id) REFERENCES reddit_threads(thread_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_citation_count
+            ON citation_tracking(citation_count DESC);
+        CREATE INDEX IF NOT EXISTS idx_citation_provider
+            ON citation_tracking(provider);
+
+        -- Feedback / learning: capture what humans actually post vs drafts
+        CREATE TABLE IF NOT EXISTS feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            thread_id TEXT,
+            tool_name TEXT NOT NULL,
+            user_name TEXT,
+            subreddit TEXT,
+            thread_title TEXT,
+            original_output TEXT,
+            final_version TEXT,
+            reason TEXT,
+            outcome TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_feedback_tool ON feedback(tool_name);
+        CREATE INDEX IF NOT EXISTS idx_feedback_subreddit ON feedback(subreddit);
+        CREATE INDEX IF NOT EXISTS idx_feedback_user ON feedback(user_name);
+        CREATE INDEX IF NOT EXISTS idx_feedback_created ON feedback(created_at DESC);
     """)
     conn.commit()
 
-    # Migrate: add peec.ai columns if they don't exist yet
-    for col_sql in [
-        "ALTER TABLE reddit_threads ADD COLUMN citation_count INTEGER DEFAULT 0",
-        "ALTER TABLE reddit_threads ADD COLUMN ai_mentioned TEXT DEFAULT 'unknown'",
-        "ALTER TABLE reddit_threads ADD COLUMN peec_competitors TEXT",
-    ]:
-        try:
-            conn.execute(col_sql)
+    # Legacy migration: drop peec-specific columns on reddit_threads if they
+    # exist from an earlier version. We keep the data by copying into
+    # citation_tracking before the column reference is abandoned.
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(reddit_threads)").fetchall()}
+        if {"citation_count", "ai_mentioned", "peec_competitors"} & cols:
+            rows = conn.execute(
+                "SELECT thread_id, citation_count, ai_mentioned, peec_competitors "
+                "FROM reddit_threads WHERE citation_count > 0 OR ai_mentioned != 'unknown'"
+            ).fetchall()
+            for r in rows:
+                conn.execute("""
+                    INSERT OR IGNORE INTO citation_tracking
+                        (thread_id, provider, citation_count, brand_mentioned, competitors_mentioned)
+                    VALUES (?, 'peec', ?, ?, ?)
+                """, (r[0], r[1] or 0, r[2] or "unknown", r[3]))
             conn.commit()
-        except sqlite3.OperationalError:
-            pass  # Column already exists
+    except sqlite3.OperationalError as e:
+        logger.debug(f"Legacy migration skipped: {e}")
 
     conn.close()
     logger.info(f"Database initialized at {DB_PATH}")
@@ -117,38 +157,20 @@ def upsert_thread(thread: dict) -> bool:
     """Insert or update a Reddit thread. Returns True if new."""
     conn = get_db()
 
-    # Build full_text from title + body + comments
     parts = [thread.get("title", ""), thread.get("body", "")]
     for comment in thread.get("comments", []):
         parts.append(comment.get("body", ""))
     full_text = "\n\n".join(p for p in parts if p)
     word_count = len(full_text.split())
-
     comments_json = json.dumps(thread.get("comments", []))
 
-    citation_count = thread.get("citation_count")
-    ai_mentioned = thread.get("ai_mentioned")
-    peec_competitors = thread.get("peec_competitors")
-    if isinstance(peec_competitors, list):
-        peec_competitors = json.dumps(peec_competitors)
-
-    # Build dynamic SET clause for peec.ai fields when present
-    peec_update = ""
-    if citation_count is not None:
-        peec_update += ", citation_count = excluded.citation_count"
-    if ai_mentioned is not None:
-        peec_update += ", ai_mentioned = excluded.ai_mentioned"
-    if peec_competitors is not None:
-        peec_update += ", peec_competitors = excluded.peec_competitors"
-
     try:
-        conn.execute(f"""
+        conn.execute("""
             INSERT INTO reddit_threads
                 (thread_id, subreddit, title, body, author, url, permalink,
                  score, upvote_ratio, num_comments, created_utc,
-                 comments_json, full_text, word_count,
-                 citation_count, ai_mentioned, peec_competitors)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 comments_json, full_text, word_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(thread_id) DO UPDATE SET
                 score = excluded.score,
                 upvote_ratio = excluded.upvote_ratio,
@@ -157,7 +179,6 @@ def upsert_thread(thread: dict) -> bool:
                 full_text = excluded.full_text,
                 word_count = excluded.word_count,
                 scraped_at = CURRENT_TIMESTAMP
-                {peec_update}
         """, (
             thread["thread_id"], thread["subreddit"], thread["title"],
             thread.get("body", ""), thread.get("author", "[deleted]"),
@@ -165,12 +186,21 @@ def upsert_thread(thread: dict) -> bool:
             thread.get("score", 0), thread.get("upvote_ratio", 0.0),
             thread.get("num_comments", 0), thread.get("created_utc", 0),
             comments_json, full_text, word_count,
-            citation_count or 0, ai_mentioned or "unknown", peec_competitors,
         ))
-        is_new = conn.execute(
-            "SELECT changes()"
-        ).fetchone()[0] > 0
+        is_new = conn.execute("SELECT changes()").fetchone()[0] > 0
         conn.commit()
+
+        # Optional citation metadata (from peec.ai / Profound / etc.)
+        if any(k in thread for k in ("citation_count", "brand_mentioned", "competitors_mentioned", "ai_mentioned")):
+            record_citation(
+                thread_id=thread["thread_id"],
+                provider=thread.get("citation_provider", "unknown"),
+                citation_count=thread.get("citation_count"),
+                brand_mentioned=thread.get("brand_mentioned") or thread.get("ai_mentioned"),
+                competitors_mentioned=thread.get("competitors_mentioned") or thread.get("peec_competitors"),
+                raw_metadata=thread.get("citation_metadata"),
+            )
+
         return is_new
     except Exception as e:
         logger.error(f"Error upserting thread {thread.get('thread_id')}: {e}")
@@ -181,19 +211,15 @@ def upsert_thread(thread: dict) -> bool:
 
 
 def get_thread(thread_id: str) -> Optional[dict]:
-    """Get a thread by its Reddit ID."""
     conn = get_db()
     row = conn.execute(
         "SELECT * FROM reddit_threads WHERE thread_id = ?", (thread_id,)
     ).fetchone()
     conn.close()
-    if row:
-        return dict(row)
-    return None
+    return dict(row) if row else None
 
 
 def get_unclassified_threads(batch_size: int = 10) -> list[dict]:
-    """Get threads that haven't been classified yet."""
     conn = get_db()
     rows = conn.execute("""
         SELECT * FROM reddit_threads
@@ -206,7 +232,6 @@ def get_unclassified_threads(batch_size: int = 10) -> list[dict]:
 
 
 def update_classification(thread_id: str, classification: dict):
-    """Store classification results for a thread."""
     conn = get_db()
     conn.execute("""
         UPDATE reddit_threads SET
@@ -214,7 +239,7 @@ def update_classification(thread_id: str, classification: dict):
             personas = ?,
             pain_points = ?,
             language_mining = ?,
-            geo_signals = ?,
+            signals = ?,
             participation_priority = ?
         WHERE thread_id = ?
     """, (
@@ -222,7 +247,7 @@ def update_classification(thread_id: str, classification: dict):
         json.dumps(classification.get("personas", {})),
         json.dumps(classification.get("pain_points", [])),
         json.dumps(classification.get("buyer_language", [])),
-        json.dumps(classification.get("geo_signals", {})),
+        json.dumps(classification.get("signals", classification.get("geo_signals", {}))),
         classification.get("participation_priority", "unscored"),
         thread_id,
     ))
@@ -241,7 +266,6 @@ def search_threads(
     limit: int = 20,
     offset: int = 0,
 ) -> list[dict]:
-    """Search threads with rich filtering."""
     conn = get_db()
     conditions = []
     params = []
@@ -284,34 +308,28 @@ def search_threads(
 
 
 def get_stats(subreddit: Optional[str] = None) -> dict:
-    """Get aggregate statistics."""
     conn = get_db()
     where = "WHERE subreddit = ?" if subreddit else ""
     params = (subreddit,) if subreddit else ()
 
-    total = conn.execute(
-        f"SELECT COUNT(*) FROM reddit_threads {where}", params
-    ).fetchone()[0]
-
+    total = conn.execute(f"SELECT COUNT(*) FROM reddit_threads {where}", params).fetchone()[0]
     classified = conn.execute(
         f"SELECT COUNT(*) FROM reddit_threads {where} {'AND' if where else 'WHERE'} classification IS NOT NULL",
-        params
+        params,
     ).fetchone()[0]
-
     by_subreddit = conn.execute("""
         SELECT subreddit, COUNT(*) as count, AVG(score) as avg_score
         FROM reddit_threads GROUP BY subreddit ORDER BY count DESC
     """).fetchall()
-
     by_priority = conn.execute("""
         SELECT participation_priority, COUNT(*) as count
         FROM reddit_threads GROUP BY participation_priority ORDER BY count DESC
     """).fetchall()
-
     by_status = conn.execute("""
         SELECT participation_status, COUNT(*) as count
         FROM reddit_threads GROUP BY participation_status ORDER BY count DESC
     """).fetchall()
+    feedback_count = conn.execute("SELECT COUNT(*) FROM feedback").fetchone()[0]
 
     conn.close()
     return {
@@ -321,6 +339,7 @@ def get_stats(subreddit: Optional[str] = None) -> dict:
         "by_subreddit": [dict(r) for r in by_subreddit],
         "by_priority": [dict(r) for r in by_priority],
         "by_status": [dict(r) for r in by_status],
+        "feedback_entries": feedback_count,
     }
 
 
@@ -330,7 +349,6 @@ def get_stats(subreddit: Optional[str] = None) -> dict:
 
 def store_grounding_doc(doc_key: str, title: str, content: str,
                         doc_type: str = "reference", source_url: str = None):
-    """Store or update a grounding document."""
     conn = get_db()
     conn.execute("""
         INSERT INTO grounding_docs (doc_key, title, doc_type, content, source_url, updated_at)
@@ -347,7 +365,6 @@ def store_grounding_doc(doc_key: str, title: str, content: str,
 
 
 def get_grounding_doc(doc_key: str) -> Optional[str]:
-    """Retrieve a grounding document's content by key."""
     conn = get_db()
     row = conn.execute(
         "SELECT content FROM grounding_docs WHERE doc_key = ?", (doc_key,)
@@ -357,7 +374,6 @@ def get_grounding_doc(doc_key: str) -> Optional[str]:
 
 
 def list_grounding_docs() -> list[dict]:
-    """List all grounding documents."""
     conn = get_db()
     rows = conn.execute("""
         SELECT doc_key, title, doc_type, LENGTH(content) as size, updated_at
@@ -372,12 +388,11 @@ def list_grounding_docs() -> list[dict]:
 # ============================================
 
 def start_scrape_run(subreddits: list, keywords: list) -> int:
-    """Record the start of a scrape run."""
     conn = get_db()
-    cursor = conn.execute("""
-        INSERT INTO scrape_runs (subreddits, keywords)
-        VALUES (?, ?)
-    """, (json.dumps(subreddits), json.dumps(keywords)))
+    cursor = conn.execute(
+        "INSERT INTO scrape_runs (subreddits, keywords) VALUES (?, ?)",
+        (json.dumps(subreddits), json.dumps(keywords)),
+    )
     run_id = cursor.lastrowid
     conn.commit()
     conn.close()
@@ -385,7 +400,6 @@ def start_scrape_run(subreddits: list, keywords: list) -> int:
 
 
 def complete_scrape_run(run_id: int, threads_found: int, threads_new: int):
-    """Record the completion of a scrape run."""
     conn = get_db()
     conn.execute("""
         UPDATE scrape_runs SET
@@ -397,6 +411,166 @@ def complete_scrape_run(run_id: int, threads_found: int, threads_new: int):
     """, (threads_found, threads_new, run_id))
     conn.commit()
     conn.close()
+
+
+# ============================================
+# Citation Tracker (peec.ai / Profound / etc.)
+# ============================================
+
+def record_citation(
+    thread_id: str,
+    provider: str,
+    citation_count: Optional[int] = None,
+    brand_mentioned: Optional[str] = None,
+    competitors_mentioned=None,
+    raw_metadata: Optional[dict] = None,
+):
+    """Record a citation data point for a thread from a tracking provider."""
+    if isinstance(competitors_mentioned, list):
+        competitors_mentioned = json.dumps(competitors_mentioned)
+    conn = get_db()
+    conn.execute("""
+        INSERT INTO citation_tracking
+            (thread_id, provider, citation_count, brand_mentioned, competitors_mentioned, raw_metadata)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(thread_id, provider) DO UPDATE SET
+            citation_count = excluded.citation_count,
+            brand_mentioned = excluded.brand_mentioned,
+            competitors_mentioned = excluded.competitors_mentioned,
+            raw_metadata = excluded.raw_metadata,
+            imported_at = CURRENT_TIMESTAMP
+    """, (
+        thread_id, provider,
+        citation_count or 0,
+        brand_mentioned or "unknown",
+        competitors_mentioned,
+        json.dumps(raw_metadata) if raw_metadata else None,
+    ))
+    conn.commit()
+    conn.close()
+
+
+def get_citation_gaps(provider: Optional[str] = None, min_count: int = 30, limit: int = 50) -> list[dict]:
+    """Find threads where the brand is NOT cited but competitors are,
+    with high AI citation counts (a high-leverage content gap)."""
+    conn = get_db()
+    where = "WHERE c.brand_mentioned IN ('No', 'no', '0', 'false') AND c.citation_count >= ?"
+    params: list = [min_count]
+    if provider:
+        where += " AND c.provider = ?"
+        params.append(provider)
+    rows = conn.execute(f"""
+        SELECT t.thread_id, t.subreddit, t.title, t.url,
+               c.citation_count, c.brand_mentioned, c.competitors_mentioned, c.provider
+        FROM citation_tracking c
+        JOIN reddit_threads t ON t.thread_id = c.thread_id
+        {where}
+        ORDER BY c.citation_count DESC
+        LIMIT ?
+    """, params + [limit]).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# ============================================
+# Feedback / Learning
+# ============================================
+
+def log_feedback(
+    tool_name: str,
+    original_output: str,
+    final_version: str,
+    reason: str,
+    thread_id: Optional[str] = None,
+    subreddit: Optional[str] = None,
+    thread_title: Optional[str] = None,
+    user_name: Optional[str] = None,
+    outcome: Optional[str] = None,
+) -> int:
+    """Record a human edit for learning. Returns the feedback id."""
+    if thread_id and not (subreddit and thread_title):
+        row = get_thread(thread_id)
+        if row:
+            subreddit = subreddit or row.get("subreddit")
+            thread_title = thread_title or row.get("title")
+    conn = get_db()
+    cursor = conn.execute("""
+        INSERT INTO feedback
+            (thread_id, tool_name, user_name, subreddit, thread_title,
+             original_output, final_version, reason, outcome)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        thread_id, tool_name, user_name, subreddit, thread_title,
+        original_output, final_version, reason, outcome,
+    ))
+    feedback_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return feedback_id
+
+
+def get_relevant_feedback(
+    tool_name: Optional[str] = None,
+    subreddit: Optional[str] = None,
+    limit: int = 5,
+) -> list[dict]:
+    """Retrieve recent feedback for few-shot prompt injection.
+
+    Prefers feedback from the same subreddit, then same tool, then most recent.
+    Each record is shaped for the prompt template: original_text / final_text / reason.
+    """
+    conn = get_db()
+    conditions = []
+    params: list = []
+    if tool_name:
+        conditions.append("tool_name = ?")
+        params.append(tool_name)
+
+    base_query = f"""
+        SELECT thread_id, subreddit, thread_title, original_output AS original_text,
+               final_version AS final_text, reason, outcome, user_name, created_at
+        FROM feedback
+        {'WHERE ' + ' AND '.join(conditions) if conditions else ''}
+        ORDER BY
+          CASE WHEN subreddit = ? THEN 0 ELSE 1 END,
+          created_at DESC
+        LIMIT ?
+    """
+    rows = conn.execute(base_query, params + [subreddit or "", limit]).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_feedback_history(
+    tool_name: Optional[str] = None,
+    user_name: Optional[str] = None,
+    subreddit: Optional[str] = None,
+    limit: int = 50,
+) -> list[dict]:
+    conn = get_db()
+    conditions = []
+    params: list = []
+    if tool_name:
+        conditions.append("tool_name = ?")
+        params.append(tool_name)
+    if user_name:
+        conditions.append("user_name = ?")
+        params.append(user_name)
+    if subreddit:
+        conditions.append("subreddit = ?")
+        params.append(subreddit)
+
+    where = "WHERE " + " AND ".join(conditions) if conditions else ""
+    rows = conn.execute(f"""
+        SELECT id, thread_id, tool_name, user_name, subreddit, thread_title,
+               original_output, final_version, reason, outcome, created_at
+        FROM feedback
+        {where}
+        ORDER BY created_at DESC
+        LIMIT ?
+    """, params + [limit]).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 # Initialize on import
