@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 import anthropic
 
@@ -11,6 +12,7 @@ from db import get_grounding_doc, get_thread, update_classification, get_unclass
 logger = logging.getLogger(__name__)
 
 CLASSIFIER_MODEL = os.environ.get("CLASSIFIER_MODEL", "claude-sonnet-4-5-20250929")
+CLASSIFIER_CONCURRENCY = int(os.environ.get("CLASSIFIER_CONCURRENCY", "5"))
 
 
 def _format_top_comments(comments_json: str, limit: int = 10) -> str:
@@ -146,7 +148,12 @@ Return ONLY valid JSON (no markdown fences, no explanation) with this exact stru
 
 
 def classify_batch(batch_size: int = 10, thread_ids: Optional[list[str]] = None) -> dict:
-    """Classify a batch of threads.
+    """Classify a batch of threads concurrently.
+
+    Anthropic calls run in parallel (CLASSIFIER_CONCURRENCY workers) so a
+    25-thread batch completes in roughly 1/5 the wall time vs. serial. DB
+    writes happen on the main thread after each worker returns to avoid
+    SQLite write contention.
 
     Args:
         batch_size: Number of unclassified threads to process
@@ -164,31 +171,39 @@ def classify_batch(batch_size: int = 10, thread_ids: Optional[list[str]] = None)
     if not threads:
         return {"classified": 0, "message": "No unclassified threads found"}
 
-    results = {"classified": 0, "errors": 0, "details": []}
-
-    for thread in threads:
+    def _classify_one(thread):
         tid = thread["thread_id"]
         logger.info(f"Classifying thread {tid}: {thread['title'][:60]}...")
         try:
-            classification = classify_thread_data(thread)
-            if "error" not in classification:
-                update_classification(tid, classification)
-                results["classified"] += 1
-                results["details"].append({
-                    "thread_id": tid,
-                    "title": thread["title"][:80],
-                    "topic": classification.get("topic"),
-                    "priority": classification.get("participation_priority"),
-                })
-            else:
+            return (thread, classify_thread_data(thread), None)
+        except Exception as e:
+            return (thread, None, str(e))
+
+    results = {"classified": 0, "errors": 0, "details": []}
+
+    workers = min(CLASSIFIER_CONCURRENCY, len(threads))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for thread, classification, error in pool.map(_classify_one, threads):
+            tid = thread["thread_id"]
+            if error:
+                results["errors"] += 1
+                results["details"].append({"thread_id": tid, "error": error})
+                continue
+            if "error" in classification:
                 results["errors"] += 1
                 results["details"].append({
                     "thread_id": tid,
                     "error": classification["error"],
                 })
-        except Exception as e:
-            results["errors"] += 1
-            results["details"].append({"thread_id": tid, "error": str(e)})
+                continue
+            update_classification(tid, classification)
+            results["classified"] += 1
+            results["details"].append({
+                "thread_id": tid,
+                "title": thread["title"][:80],
+                "topic": classification.get("topic"),
+                "priority": classification.get("participation_priority"),
+            })
 
     return results
 
