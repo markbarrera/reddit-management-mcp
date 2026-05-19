@@ -81,7 +81,7 @@ async def app(scope, receive, send):
             stats = get_stats()
             await _json_response(send, {
                 "status": "healthy",
-                "service": "osano-reddit-intelligence",
+                "service": "onramp-funds-reddit-intelligence",
                 "threads_in_db": stats.get("total_threads", 0),
                 "classified": stats.get("classified", 0),
             })
@@ -90,7 +90,7 @@ async def app(scope, receive, send):
         # Root info - no auth required
         if path == "/":
             await _json_response(send, {
-                "service": "Osano Reddit Intelligence MCP",
+                "service": "Onramp Funds Reddit Intelligence MCP",
                 "mcp_endpoint": "/mcp",
                 "health": "/health",
             })
@@ -117,5 +117,5 @@ async def app(scope, receive, send):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
-    logger.info(f"Starting Osano Reddit Intelligence MCP on port {port}")
+    logger.info(f"Starting Onramp Funds Reddit Intelligence MCP on port {port}")
     uvicorn.run(app, host="0.0.0.0", port=port)
