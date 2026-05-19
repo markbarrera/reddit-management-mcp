@@ -110,16 +110,29 @@ async def app(scope, receive, send):
 
         # Auth check for MCP endpoints
         if API_KEYS:
+            token = None
+
+            # Method 1: Authorization: Bearer <token> header (mcp-remote, Claude Desktop)
             headers = dict(scope.get("headers", []))
             auth = headers.get(b"authorization", b"").decode()
-            if not auth.startswith("Bearer "):
+            if auth.startswith("Bearer "):
+                token = auth[7:]
+
+            # Method 2: ?api_key=<token> query string (Claude.ai Custom Connector UI,
+            # which doesn't yet support custom headers in the Add Connector dialog)
+            if not token:
+                from urllib.parse import parse_qs
+                qs = scope.get("query_string", b"").decode()
+                params = parse_qs(qs)
+                token = (params.get("api_key") or [None])[0]
+
+            if not token:
                 await _json_response(
                     send,
-                    {"error": "Missing or invalid Authorization header"},
+                    {"error": "Missing Authorization header or api_key query param"},
                     401,
                 )
                 return
-            token = auth[7:]
             if token not in API_KEYS:
                 await _json_response(send, {"error": "Invalid API key"}, 403)
                 return
