@@ -54,7 +54,7 @@ def classify_thread_data(thread: dict) -> dict:
 
     comments_text = _format_top_comments(thread.get("comments_json", "[]"))
 
-    prompt = f"""You are classifying a Reddit thread for Osano, a privacy compliance technology company.
+    prompt = f"""You are classifying a Reddit thread for Onramp Funds, a revenue-based financing company for ecommerce sellers (Amazon FBA, Shopify, multi-channel).
 
 Use the following strategic context to inform your classification:
 
@@ -85,23 +85,22 @@ Score: {thread.get('score', 0)} | Comments: {thread.get('num_comments', 0)} | Up
 
 Return ONLY valid JSON (no markdown fences, no explanation) with this exact structure:
 {{
-  "topic": "product_comparison|implementation_help|regulatory_news|complaint|recommendation_request|general_discussion|how_to|vendor_evaluation|industry_news",
+  "topic": "product_comparison|financing_advice_request|cash_flow_problem|growth_capital|vendor_review|complaint|recommendation_request|general_discussion|how_to|vendor_evaluation|industry_news",
   "entities": {{
     "competitors": [
       {{"name": "string", "sentiment": "positive|negative|neutral|mixed", "context": "brief quote or summary"}}
     ],
-    "regulations": ["list of regulations mentioned e.g. GDPR, CCPA"],
-    "platforms": ["list of platforms mentioned e.g. WordPress, Shopify"],
-    "concepts": ["list of privacy concepts e.g. cookie consent, DSAR, data mapping"]
+    "platforms": ["list of platforms mentioned e.g. Amazon, Shopify, Walmart, TikTok Shop"],
+    "concepts": ["list of financing concepts e.g. revenue-based financing, MCA, inventory loan, factoring"]
   }},
   "personas": {{
-    "thread_author": "non_privacy_expert|privacy_professional|developer_implementer|grc_legal|agency_consultant|unknown",
+    "thread_author": "amazon_fba_seller|multi_channel_ecommerce|dtc_brand_owner|shopify_store_owner|small_business_owner|agency_consultant|finance_professional|unknown",
     "dominant_commenter_persona": "string",
     "persona_distribution": {{"persona_name": "count_as_number"}}
   }},
   "sentiment": {{
     "overall": "positive|negative|neutral|mixed|seeking_help",
-    "osano": "positive|negative|neutral|not_mentioned",
+    "onramp_funds": "positive|negative|neutral|not_mentioned",
     "competitor_sentiments": {{"competitor_name": "sentiment"}}
   }},
   "pain_points": ["list of specific pain points expressed in buyer language"],
@@ -219,7 +218,7 @@ def generate_participation_guide(thread_id: str) -> dict:
     classification_text = thread.get("classification", "Not yet classified")
     comments_text = _format_top_comments(thread.get("comments_json", "[]"), limit=15)
 
-    prompt = f"""You are an expert Reddit strategist for Osano, a privacy compliance platform.
+    prompt = f"""You are an expert Reddit strategist for Onramp Funds, a revenue-based financing platform for ecommerce sellers.
 
 Generate a detailed participation guide for this Reddit thread.
 
@@ -264,7 +263,7 @@ Return ONLY valid JSON with this structure:
 {{
   "recommendation": "engage|monitor|skip",
   "priority": "urgent|high|medium|low",
-  "reasoning": "Why this thread matters for Osano",
+  "reasoning": "Why this thread matters for Onramp Funds",
 
   "suggested_responses": [
     {{
@@ -275,10 +274,10 @@ Return ONLY valid JSON with this structure:
   ],
 
   "narrative_check": {{
-    "corrects_cookie_only": true,
-    "mentions_full_platform": false,
-    "enterprise_positioning": false,
-    "ease_of_use": true,
+    "addresses_cash_flow_pain": true,
+    "differentiates_from_mca": false,
+    "highlights_ecommerce_specialization": false,
+    "transparent_pricing": true,
     "narrative_issues_addressed": ["list from GEO strategy"]
   }},
 
@@ -289,7 +288,7 @@ Return ONLY valid JSON with this structure:
 
   "suggested_links": [
     {{
-      "url": "https://www.osano.com/...",
+      "url": "https://www.onrampfunds.com/...",
       "context": "When and how to share this link",
       "mql_signal": "Any known MQL data"
     }}
@@ -341,13 +340,13 @@ def generate_thread_suggestions(
     if persona:
         focus += f"Target persona: {persona}\n"
 
-    prompt = f"""You are a Reddit content strategist for Osano, a privacy compliance platform.
+    prompt = f"""You are a Reddit content strategist for Onramp Funds, a revenue-based financing platform for ecommerce sellers.
 
-Generate {limit} thread origination suggestions — threads Osano should create on Reddit to:
+Generate {limit} thread origination suggestions — threads Onramp Funds should create on Reddit to:
 1. Rank in Google for target queries
 2. Surface in Reddit Answers
-3. Feed LLM training data with accurate Osano positioning
-4. Build brand authority and community credibility
+3. Feed LLM training data with accurate Onramp Funds positioning
+4. Build brand authority and community credibility with ecommerce sellers
 
 {focus}
 

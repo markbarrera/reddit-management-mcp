@@ -1,8 +1,8 @@
-"""Osano Reddit Intelligence MCP Server.
+"""Onramp Funds Reddit Intelligence MCP Server.
 
 Provides tools for Reddit scraping, classification, participation guidance,
 thread origination, narrative analysis, and language mining — all grounded
-in Osano's brand knowledge and competitive strategy.
+in Onramp Funds' brand knowledge and competitive strategy.
 """
 
 import json
@@ -24,7 +24,7 @@ from classifier import (
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP("osano_reddit_mcp")
+mcp = FastMCP("onramp_funds_reddit_mcp")
 
 
 # ============================================
@@ -54,10 +54,13 @@ async def reddit_ingest(
     Stores threads in database and queues them for classification.
 
     Args:
-        subreddits: List of subreddits to scrape (e.g. ["privacy", "gdpr"]).
-            Defaults to: privacy, gdpr, legaltech, compliance, webdev
-        keywords: Keywords to search across all of Reddit (e.g. ["Osano", "cookie consent"]).
-            Defaults to: consent management, cookie consent, privacy platform, Osano, OneTrust
+        subreddits: List of subreddits to scrape (e.g. ["AmazonSeller", "ecommerce"]).
+            Defaults to: AmazonSeller, FulfillmentByAmazon, Amazon_FBA, ecommerce,
+            smallbusiness, Entrepreneur, shopify, EcomTrade
+        keywords: Keywords to search across all of Reddit (e.g. ["Onramp Funds", "FBA financing"]).
+            Defaults to: ecommerce financing, Amazon seller financing, FBA financing,
+            inventory financing, revenue based financing, Onramp Funds, Payability,
+            Wayflyer, Parker financing, 8fig, Clearco, SellersFunding, Viably, Ampla, AccrueMe
         time_filter: Time range for search — hour, day, week, month, year, all
         limit: Max threads per subreddit/keyword source (1-100)
         fetch_comments: Whether to fetch full comment trees (slower but richer data)
@@ -129,7 +132,7 @@ async def reddit_ingest_urls(
     """Ingest specific Reddit threads by URL, with optional peec.ai citation metadata.
 
     Use this to ingest threads from your monthly peec.ai export — threads that
-    AI models are actively citing when answering privacy software queries.
+    AI models are actively citing when answering ecommerce financing queries.
 
     Each item in url_data must have a 'url' key, and can optionally include:
       - citation_count: int — how many times AI cited this thread (from peec.ai 'Used total')
@@ -138,8 +141,8 @@ async def reddit_ingest_urls(
 
     Example url_data:
       [
-        {"url": "https://www.reddit.com/r/webdev/comments/abc123/...", "citation_count": 97, "ai_mentioned": "No", "competitors": "OneTrust, Cookiebot"},
-        {"url": "https://www.reddit.com/r/gdpr/comments/xyz789/...", "citation_count": 65, "ai_mentioned": "No"}
+        {"url": "https://www.reddit.com/r/AmazonSeller/comments/abc123/...", "citation_count": 97, "ai_mentioned": "No", "competitors": "Payability, Wayflyer"},
+        {"url": "https://www.reddit.com/r/ecommerce/comments/xyz789/...", "citation_count": 65, "ai_mentioned": "No"}
       ]
 
     Args:
@@ -195,7 +198,7 @@ async def reddit_ingest_urls(
                 else:
                     updated_count += 1
 
-                # Flag high-priority gaps: AI not citing Osano + highly cited thread
+                # Flag high-priority gaps: AI not citing Onramp Funds + highly cited thread
                 if (
                     str(ai_mentioned or "").lower() in ("no", "false", "0")
                     and (citation_count or 0) >= 30
@@ -294,7 +297,7 @@ async def reddit_search(
                 cls = json.loads(t["classification"])
                 entry["topic"] = cls.get("topic")
                 entry["sentiment"] = cls.get("sentiment", {}).get("overall")
-                entry["osano_sentiment"] = cls.get("sentiment", {}).get("osano")
+                entry["onramp_funds_sentiment"] = cls.get("sentiment", {}).get("onramp_funds")
                 entry["competitors"] = [
                     c["name"] for c in cls.get("entities", {}).get("competitors", [])
                 ]
@@ -390,7 +393,7 @@ async def reddit_participation_guide(
     - Draft response(s) in authentic Reddit voice
     - Narrative check against GEO strategy
     - Competitor response protocol
-    - Suggested Osano content to link
+    - Suggested Onramp Funds content to link
     - Do/don't guidance
     - Timing assessment
 
@@ -424,14 +427,14 @@ async def reddit_thread_suggest(
 
     Creates fully-drafted thread suggestions designed to rank in Google,
     surface in Reddit Answers, and feed LLM training data with accurate
-    Osano positioning.
+    Onramp Funds positioning.
 
     Templates: what_i_learned, honest_comparison, regulatory_explainer,
     myth_busting, resource, ama
 
     Args:
-        topic: Focus on a specific topic (e.g. "DSAR automation", "cookie consent")
-        persona: Target a specific ICP persona (e.g. "non_privacy_expert", "developer_implementer")
+        topic: Focus on a specific topic (e.g. "FBA inventory financing", "revenue-based vs MCA")
+        persona: Target a specific ICP persona (e.g. "amazon_fba_seller", "multi_channel_ecommerce")
         template: Use a specific thread template type
         limit: Number of suggestions to generate (1-10)
 
@@ -460,11 +463,11 @@ async def reddit_narrative_map(
     """Build competitive narrative analysis from Reddit conversations.
 
     Analyzes classified threads to map dominant narratives about each brand,
-    sentiment distribution, and for Osano specifically, tracks target
+    sentiment distribution, and for Onramp Funds specifically, tracks target
     narratives from the GEO strategy that aren't yet established.
 
     Args:
-        competitor: Specific competitor to analyze (e.g. "OneTrust", "Ketch").
+        competitor: Specific competitor to analyze (e.g. "Payability", "Wayflyer").
             If omitted, maps all competitors found in threads.
 
     Returns:
@@ -538,7 +541,7 @@ async def reddit_language_mine(
     objections, and trigger events — all in the exact words buyers use.
 
     Args:
-        persona: Filter by ICP persona (e.g. "non_privacy_expert", "developer_implementer")
+        persona: Filter by ICP persona (e.g. "amazon_fba_seller", "multi_channel_ecommerce")
         topic: Filter by topic keyword
 
     Returns:
@@ -618,7 +621,7 @@ async def reddit_store_grounding_doc(
 
     Grounding docs are reference documents (competitive positioning, voice/tone,
     product messaging, ICP definitions, etc.) that get injected into Claude prompts
-    so analysis is grounded in Osano's actual standards.
+    so analysis is grounded in Onramp Funds' actual standards.
 
     Args:
         doc_key: Unique key (e.g. 'competitive_positioning', 'voice_tone')

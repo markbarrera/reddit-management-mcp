@@ -20,6 +20,18 @@ logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
 
+def _seed_grounding_docs():
+    """Idempotently load grounding docs from grounding_docs/ on startup."""
+    try:
+        from seed_grounding_docs import main as seed_main
+        seed_main()
+    except Exception as e:
+        logger.warning(f"Grounding doc seeding skipped: {e}")
+
+
+_seed_grounding_docs()
+
+
 def _parse_api_keys() -> dict[str, str]:
     """Parse API keys from environment variable."""
     raw = os.environ.get("REDDIT_MCP_API_KEYS", "")
@@ -81,7 +93,7 @@ async def app(scope, receive, send):
             stats = get_stats()
             await _json_response(send, {
                 "status": "healthy",
-                "service": "osano-reddit-intelligence",
+                "service": "onramp-funds-reddit-intelligence",
                 "threads_in_db": stats.get("total_threads", 0),
                 "classified": stats.get("classified", 0),
             })
@@ -90,7 +102,7 @@ async def app(scope, receive, send):
         # Root info - no auth required
         if path == "/":
             await _json_response(send, {
-                "service": "Osano Reddit Intelligence MCP",
+                "service": "Onramp Funds Reddit Intelligence MCP",
                 "mcp_endpoint": "/mcp",
                 "health": "/health",
             })
@@ -117,5 +129,5 @@ async def app(scope, receive, send):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
-    logger.info(f"Starting Osano Reddit Intelligence MCP on port {port}")
+    logger.info(f"Starting Onramp Funds Reddit Intelligence MCP on port {port}")
     uvicorn.run(app, host="0.0.0.0", port=port)

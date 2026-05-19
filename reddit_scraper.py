@@ -20,12 +20,17 @@ MAX_RETRIES = 3
 BACKOFF_FACTOR = 2.0
 
 # Default configuration
-DEFAULT_SUBREDDITS = ["privacy", "gdpr", "legaltech", "compliance", "webdev"]
-DEFAULT_KEYWORDS = [
-    "consent management", "cookie consent", "privacy platform",
-    "Osano", "OneTrust", "Cookiebot", "GDPR compliance", "CCPA compliance",
+DEFAULT_SUBREDDITS = [
+    "AmazonSeller", "FulfillmentByAmazon", "Amazon_FBA", "ecommerce",
+    "smallbusiness", "Entrepreneur", "shopify", "EcomTrade",
 ]
-DEFAULT_USER_AGENT = "osano-reddit-intelligence/1.0 (content research)"
+DEFAULT_KEYWORDS = [
+    "ecommerce financing", "Amazon seller financing", "FBA financing",
+    "inventory financing", "working capital ecommerce", "revenue based financing",
+    "Onramp Funds", "Payability", "Wayflyer", "Parker financing", "8fig",
+    "Clearco", "SellersFunding", "Viably", "Ampla", "AccrueMe",
+]
+DEFAULT_USER_AGENT = "onramp-funds-reddit-intelligence/1.0 (content research)"
 
 # Reddit OAuth token endpoint
 REDDIT_TOKEN_URL = "https://www.reddit.com/api/v1/access_token"
@@ -34,20 +39,23 @@ REDDIT_PUBLIC_BASE = "https://www.reddit.com"
 REDDIT_OAUTH_BASE = "https://oauth.reddit.com"
 
 BRAND_KEYWORDS = [
-    "osano", "onetrust", "cookiebot", "ketch privacy", "trustarc",
-    "securiti", "bigid", "usercentrics", "didomi", "transcend",
+    "onramp funds", "payability", "wayflyer", "parker", "8fig", "clearco",
+    "sellersfunding", "viably", "ampla", "accrueme", "uncapped", "stenn",
+    "kickfurther", "settle", "shopify capital", "amazon lending",
 ]
 PRODUCT_KEYWORDS = [
-    "consent management platform", "CMP", "cookie consent",
-    "privacy platform", "DSAR tool", "data mapping tool",
+    "revenue based financing", "RBF", "inventory financing",
+    "working capital", "merchant cash advance", "ecommerce loan",
+    "amazon seller loan", "FBA capital", "inventory loan",
 ]
 REGULATORY_KEYWORDS = [
-    "GDPR compliance", "CCPA compliance", "state privacy law",
-    "privacy fine", "data privacy regulation",
+    "amazon seller fees", "FBA fees", "amazon hold", "amazon reserve",
+    "stripe hold", "marketplace payouts",
 ]
 PROBLEM_KEYWORDS = [
-    "privacy compliance help", "cookie consent requirements",
-    "do I need cookie consent", "privacy policy requirements",
+    "cash flow problem", "inventory cash flow", "amazon payout delay",
+    "scaling inventory", "stockout", "growth capital ecommerce",
+    "how to finance inventory",
 ]
 
 
@@ -85,7 +93,7 @@ class RedditScraper:
             self._reddit_password = password
             self._base_url = REDDIT_OAUTH_BASE
             # Reddit requires username in user agent for OAuth apps
-            self.user_agent = f"script:osano-reddit-mcp:1.0 (by /u/{username})"
+            self.user_agent = f"script:onramp-funds-reddit-mcp:1.0 (by /u/{username})"
             logger.info(f"Reddit OAuth enabled — user: u/{username}")
         else:
             self._oauth_enabled = False
