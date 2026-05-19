@@ -20,6 +20,18 @@ logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
 
+def _seed_grounding_docs():
+    """Idempotently load grounding docs from grounding_docs/ on startup."""
+    try:
+        from seed_grounding_docs import main as seed_main
+        seed_main()
+    except Exception as e:
+        logger.warning(f"Grounding doc seeding skipped: {e}")
+
+
+_seed_grounding_docs()
+
+
 def _parse_api_keys() -> dict[str, str]:
     """Parse API keys from environment variable."""
     raw = os.environ.get("REDDIT_MCP_API_KEYS", "")

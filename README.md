@@ -2,6 +2,10 @@
 
 Reddit market intelligence, participation guidance, and GEO optimization for Onramp Funds — revenue-based financing for ecommerce sellers.
 
+**For deployment + connecting Claude to this MCP, see [HANDOFF.md](./HANDOFF.md).**
+
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new)
+
 ## Setup
 
 ```bash
