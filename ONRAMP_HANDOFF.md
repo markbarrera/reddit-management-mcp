@@ -3,6 +3,25 @@
 
 ---
 
+## ⚡ Quick start (30 seconds)
+
+The system is **already deployed and running** for you. To start using it:
+
+1. Open **Claude.ai** → click your profile → **Settings** → **Connectors**
+2. Click **Add custom connector**
+3. **Name:** `Onramp Reddit MCP`
+4. **URL:** paste the URL we sent you separately (looks like `https://reddit-mcp-production-XXXX.up.railway.app/mcp?api_key=sk-onramp-...`)
+5. Leave OAuth fields blank
+6. Click **Add**
+
+Open a new Claude chat, confirm "Onramp Reddit MCP" appears in your tool picker, and try:
+
+> List the grounding docs available in the Onramp Reddit MCP.
+
+You should see six docs returned. That confirms you're connected. The rest of this document explains what to do with it.
+
+---
+
 ## 1. Executive summary
 
 We've built and delivered a Reddit market-intelligence and content-strategy system, packaged as an **MCP (Model Context Protocol) server**. Once connected to Claude, it gives the Onramp Funds team a single conversational interface to:
@@ -19,13 +38,15 @@ A **daily Slack digest** posts the most actionable threads to a channel of your 
 The whole system is grounded in **six brand documents** we authored from public research: competitive positioning, voice & tone, Reddit engagement rules, product messaging, ICP personas, and a GEO (Generative Engine Optimization) content strategy. These docs are not generic — they're specific to Onramp Funds, including head-to-head positioning against your fourteen competitors and your ICP personas (amazon_fba_seller, multi_channel_ecommerce, dtc_brand_owner, etc.).
 
 **What you do to use it:**
-1. Deploy the MCP to Railway (~5 minutes, instructions in §6).
-2. Connect Claude Desktop or Claude Code (~2 minutes, instructions in §7).
-3. Set up a Reddit account (§8 — we strongly recommend a real-name employee account, ideally Eric).
-4. Configure the daily Slack digest (~3 minutes, instructions in §9).
-5. Confirm or correct the nine items pending your review (§11).
 
-Total setup time: **under 30 minutes.** Total monthly cost: **$15-$60** depending on usage volume.
+The MCP is already deployed for you. The remaining steps are:
+
+1. **Connect Claude (~30 seconds)** — Claude.ai → Settings → Connectors → Add custom connector. Paste one URL. See §7.
+2. **Set up the Reddit account (§8)** — we strongly recommend a real-name employee account, ideally Eric. This is the most consequential setup step.
+3. **Configure the daily Slack digest (§9)** — optional, ~3 minutes.
+4. **Review the nine items pending your confirmation (§11)** — fee framing, growth stats, escalation contact, etc.
+
+Total setup time: **under 15 minutes.** Total monthly cost: **$15-$60** depending on usage volume.
 
 ---
 
@@ -142,9 +163,15 @@ To avoid scope confusion:
 
 ---
 
-## 6. Deployment
+## 6. Deployment (reference)
 
-The fastest path is Railway. Self-hosting via Docker is also documented at the end of this section.
+**The MCP is already deployed for you. This section is for reference — read it if you want to understand the infrastructure, redeploy from scratch, or self-host on different infrastructure.**
+
+Current deployment:
+- **Host:** Railway
+- **Database:** SQLite on a Railway persistent volume mounted at `/data`
+- **Auto-redeploy:** the service auto-redeploys whenever the `main` branch of the GitHub repo is updated
+- **Reddit access:** uses Reddit's public JSON endpoints (no OAuth credentials configured — see §6.2 if you want to add OAuth later)
 
 ### 6.1 Get an Anthropic API key
 
@@ -247,9 +274,29 @@ Put it behind a reverse proxy with HTTPS (Caddy, nginx, Cloudflare Tunnel). Bear
 
 ## 7. Connecting Claude
 
-### Claude Desktop
+### Recommended: Claude.ai Custom Connector (no install, ~30 seconds)
 
-Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+This is the fastest path. Works in the Claude.ai web app and Claude Desktop.
+
+1. Open **Claude.ai** → click your profile icon → **Settings**
+2. Go to **Connectors** in the sidebar
+3. Click **Add custom connector** at the bottom
+4. Fill in:
+   - **Name:** `Onramp Reddit MCP`
+   - **URL:** the full MCP URL with the API key as a query parameter, e.g.:
+     ```
+     https://YOUR-RAILWAY-URL/mcp?api_key=sk-onramp-YOUR-KEY
+     ```
+5. Leave **Advanced settings** blank (the OAuth fields stay empty)
+6. Click **Add**
+
+The connector appears in your tool picker in any new conversation. The ten `reddit_*` tools are now available.
+
+**Note on the URL pattern:** The API key is passed as `?api_key=...` because Claude's Connector UI doesn't yet support custom HTTP headers. The MCP server accepts the key via either query string OR `Authorization: Bearer` header, so both paths work.
+
+### Alternative: Claude Desktop with local config (older clients)
+
+If you're on a Claude Desktop version without Connectors, you can still wire it up the old way via `mcp-remote`. Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
 
 ```json
 {
@@ -268,9 +315,9 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) o
 }
 ```
 
-Quit and restart Claude Desktop. The ten `reddit_*` tools should appear in the tool picker (look for the tools icon in the input bar).
+Fully quit (Cmd+Q) and restart Claude Desktop.
 
-### Claude Code
+### Alternative: Claude Code
 
 ```bash
 claude mcp add --transport http onramp-reddit \
@@ -418,9 +465,9 @@ Also from `reddit_engagement_rules.md`. Internalize this before posting:
 
 ---
 
-## 9. Slack daily digest setup
+## 9. Slack daily digest setup (optional, not yet configured)
 
-The digest posts to a Slack channel of your choice every morning. It takes about three minutes to set up.
+The digest posts to a Slack channel of your choice every morning. **It is not yet configured** in the current deployment — set it up when you're ready. Takes about three minutes.
 
 ### 9.1 Create the Slack incoming webhook
 
