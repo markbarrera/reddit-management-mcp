@@ -14,6 +14,9 @@ DB_PATH = os.environ.get("REDDIT_DB_PATH", "reddit_intelligence.db")
 
 def get_db() -> sqlite3.Connection:
     """Get a database connection."""
+    parent = os.path.dirname(DB_PATH)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
