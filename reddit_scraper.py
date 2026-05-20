@@ -5,8 +5,10 @@ import re
 import time
 import json
 import logging
+import threading
 import httpx
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 from datetime import datetime, timezone
 
@@ -14,10 +16,16 @@ ATOM_NS = "{http://www.w3.org/2005/Atom}"
 
 logger = logging.getLogger(__name__)
 
-# Rate limiting
-MIN_REQUEST_INTERVAL = 2.0  # seconds between requests
+# Rate limiting. Reddit's public-API budget is ~60 req/min for unauth, so
+# 1s between requests is the real ceiling. We were running at 2s which was
+# overly conservative.
+MIN_REQUEST_INTERVAL = float(os.environ.get("REDDIT_MIN_REQUEST_INTERVAL", "1.0"))
 MAX_RETRIES = 3
 BACKOFF_FACTOR = 2.0
+
+# Comment-fetch parallelism. Workers share a rate limiter, so concurrency
+# here mostly overlaps network wait with rate-limiter wait.
+COMMENT_FETCH_CONCURRENCY = int(os.environ.get("REDDIT_COMMENT_CONCURRENCY", "3"))
 
 # Default configuration
 DEFAULT_SUBREDDITS = [
@@ -76,6 +84,7 @@ class RedditScraper:
 
     def __init__(self, user_agent: str = DEFAULT_USER_AGENT):
         self._last_request_time = 0.0
+        self._rate_lock = threading.Lock()
         self._access_token: Optional[str] = None
         self._token_expires: float = 0.0
 
@@ -152,11 +161,12 @@ class RedditScraper:
             self._authenticate()
 
     def _rate_limit(self):
-        """Enforce minimum interval between requests."""
-        elapsed = time.time() - self._last_request_time
-        if elapsed < MIN_REQUEST_INTERVAL:
-            time.sleep(MIN_REQUEST_INTERVAL - elapsed)
-        self._last_request_time = time.time()
+        """Enforce minimum interval between requests across threads."""
+        with self._rate_lock:
+            elapsed = time.time() - self._last_request_time
+            if elapsed < MIN_REQUEST_INTERVAL:
+                time.sleep(MIN_REQUEST_INTERVAL - elapsed)
+            self._last_request_time = time.time()
 
     def _request(self, url: str, params: Optional[dict] = None) -> dict:
         """Make a rate-limited request with retry and backoff."""
@@ -543,19 +553,26 @@ class RedditScraper:
                 logger.error(f"Error {msg}")
                 errors.append(msg)
 
-        # Fetch comments for each thread
+        # Fetch comments for each thread, in parallel (rate limiter is shared/locked)
         if fetch_comments:
-            for thread in all_threads:
+            def _fetch_for(thread):
                 try:
-                    comments = self.fetch_thread_comments(
+                    return thread["thread_id"], self.fetch_thread_comments(
                         thread["subreddit"], thread["thread_id"]
                     )
-                    thread["comments"] = comments
                 except Exception as e:
                     logger.error(
                         f"Error fetching comments for {thread['thread_id']}: {e}"
                     )
-                    thread["comments"] = []
+                    return thread["thread_id"], []
+
+            workers = min(COMMENT_FETCH_CONCURRENCY, max(1, len(all_threads)))
+            results = {}
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                for tid, comments in pool.map(_fetch_for, all_threads):
+                    results[tid] = comments
+            for thread in all_threads:
+                thread["comments"] = results.get(thread["thread_id"], [])
         else:
             for thread in all_threads:
                 thread["comments"] = []
