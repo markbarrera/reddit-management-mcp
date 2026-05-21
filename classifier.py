@@ -12,7 +12,7 @@ from db import get_grounding_doc, get_thread, update_classification, get_unclass
 logger = logging.getLogger(__name__)
 
 CLASSIFIER_MODEL = os.environ.get("CLASSIFIER_MODEL", "claude-sonnet-4-5-20250929")
-CLASSIFIER_CONCURRENCY = int(os.environ.get("CLASSIFIER_CONCURRENCY", "5"))
+CLASSIFIER_CONCURRENCY = int(os.environ.get("CLASSIFIER_CONCURRENCY", "8"))
 
 
 def _format_top_comments(comments_json: str, limit: int = 10) -> str:

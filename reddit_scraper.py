@@ -33,10 +33,31 @@ DEFAULT_SUBREDDITS = [
     "smallbusiness", "Entrepreneur", "shopify", "EcomTrade",
 ]
 DEFAULT_KEYWORDS = [
-    "ecommerce financing", "Amazon seller financing", "FBA financing",
-    "inventory financing", "working capital ecommerce", "revenue based financing",
-    "Onramp Funds", "Payability", "Wayflyer", "Parker financing", "8fig",
-    "Clearco", "SellersFunding", "Viably", "Ampla", "AccrueMe",
+    # Brand mentions — specific enough to avoid noise on their own
+    "Onramp Funds",
+    "Payability",
+    "Wayflyer",
+    "8fig",
+    "Clearco",
+    "Clearbanc",
+    "SellersFunding",
+    "SellersFi",
+    "AccrueMe",
+    "Shopify Capital",
+    "Amazon Lending",
+    "Kickfurther",
+    # Specific financing concepts (multi-word to narrow Reddit's match)
+    "Amazon seller financing",
+    "FBA financing",
+    "Amazon FBA loan",
+    "ecommerce inventory financing",
+    "Amazon payout delay",
+    "Shopify Capital alternative",
+    "revenue based financing ecommerce",
+    "merchant cash advance Amazon",
+    # Removed: "Parker" / "Parker financing" (too generic), "Viably" (common
+    # adverb pulls noise), "Ampla" (defunct, acquired by FundThrough),
+    # "ecommerce financing" + "working capital ecommerce" (too broad)
 ]
 DEFAULT_USER_AGENT = "onramp-funds-reddit-intelligence/1.0 (content research)"
 
@@ -503,6 +524,7 @@ class RedditScraper:
         time_filter: str = "month",
         limit_per_source: int = 25,
         fetch_comments: bool = True,
+        restrict_keywords_to_subreddits: bool = False,
     ) -> tuple[list[dict], list[str]]:
         """Full scrape: subreddit listings + keyword searches + comment fetching.
 
@@ -512,6 +534,10 @@ class RedditScraper:
             time_filter: Time range for search
             limit_per_source: Max threads per subreddit/keyword
             fetch_comments: Whether to fetch full comment trees
+            restrict_keywords_to_subreddits: Default False — keyword searches
+                go across all of Reddit so we find valuable conversations
+                wherever they happen. Set True if you want strictly scoped
+                discovery (keyword search restricted to target subreddits).
 
         Returns:
             Tuple of (threads list, errors list)
@@ -538,16 +564,35 @@ class RedditScraper:
                 logger.error(f"Error scraping {msg}")
                 errors.append(msg)
 
-        # Keyword searches across all Reddit
+        # Keyword searches — restricted to target subreddits by default to
+        # avoid pulling in unrelated subreddits (a generic search for
+        # "financing" returns r/PrideandPrejudice etc.)
         for kw in keywords:
             try:
-                threads = self.search_all(
-                    kw, sort="relevance", time_filter=time_filter, limit=limit_per_source
-                )
-                for t in threads:
-                    if t["thread_id"] not in seen_ids:
-                        seen_ids.add(t["thread_id"])
-                        all_threads.append(t)
+                if restrict_keywords_to_subreddits:
+                    for sub in subreddits:
+                        try:
+                            threads = self.search_subreddit(
+                                sub, kw, sort="relevance",
+                                time_filter=time_filter, limit=limit_per_source,
+                            )
+                            for t in threads:
+                                if t["thread_id"] not in seen_ids:
+                                    seen_ids.add(t["thread_id"])
+                                    all_threads.append(t)
+                        except Exception as e:
+                            msg = f"search '{kw}' in r/{sub}: {type(e).__name__}: {e}"
+                            logger.error(f"Error {msg}")
+                            errors.append(msg)
+                else:
+                    threads = self.search_all(
+                        kw, sort="relevance",
+                        time_filter=time_filter, limit=limit_per_source,
+                    )
+                    for t in threads:
+                        if t["thread_id"] not in seen_ids:
+                            seen_ids.add(t["thread_id"])
+                            all_threads.append(t)
             except Exception as e:
                 msg = f"search '{kw}': {type(e).__name__}: {e}"
                 logger.error(f"Error {msg}")

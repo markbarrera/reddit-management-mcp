@@ -47,6 +47,7 @@ async def reddit_ingest(
     time_filter: str = "month",
     limit: int = 25,
     fetch_comments: bool = True,
+    restrict_keywords_to_subreddits: bool = False,
 ) -> str:
     """Scrape Reddit threads from subreddits and keyword searches.
 
@@ -57,13 +58,20 @@ async def reddit_ingest(
         subreddits: List of subreddits to scrape (e.g. ["AmazonSeller", "ecommerce"]).
             Defaults to: AmazonSeller, FulfillmentByAmazon, Amazon_FBA, ecommerce,
             smallbusiness, Entrepreneur, shopify, EcomTrade
-        keywords: Keywords to search across all of Reddit (e.g. ["Onramp Funds", "FBA financing"]).
-            Defaults to: ecommerce financing, Amazon seller financing, FBA financing,
-            inventory financing, revenue based financing, Onramp Funds, Payability,
-            Wayflyer, Parker financing, 8fig, Clearco, SellersFunding, Viably, Ampla, AccrueMe
+        keywords: Keywords to search across all of Reddit. Defaults are tuned
+            to be specific enough (full brand names + multi-word phrases) to
+            avoid noise: Onramp Funds, Payability, Wayflyer, 8fig, Clearco,
+            Clearbanc, SellersFunding, SellersFi, AccrueMe, Shopify Capital,
+            Amazon Lending, Kickfurther, plus narrow concept phrases like
+            "Amazon FBA loan", "Amazon payout delay", "Shopify Capital
+            alternative".
         time_filter: Time range for search — hour, day, week, month, year, all
         limit: Max threads per subreddit/keyword source (1-100)
         fetch_comments: Whether to fetch full comment trees (slower but richer data)
+        restrict_keywords_to_subreddits: Default False — keywords search
+            across all of Reddit so we find valuable conversations in
+            unexpected subreddits. Set True only if you want strictly scoped
+            discovery within the target subreddits.
 
     Returns:
         JSON summary with thread counts, new vs updated, and sample thread titles
@@ -78,6 +86,7 @@ async def reddit_ingest(
             time_filter=time_filter,
             limit_per_source=limit,
             fetch_comments=fetch_comments,
+            restrict_keywords_to_subreddits=restrict_keywords_to_subreddits,
         )
 
         new_count = 0
