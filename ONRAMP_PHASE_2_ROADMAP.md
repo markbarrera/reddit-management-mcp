@@ -18,18 +18,92 @@ This frame reshapes what's worth building. Below is Phase 2 ordered by impact on
 
 ---
 
-## Current state (Phase 1)
+## Current state (Phase 1) — what's been built and deployed
 
-What we have running today:
+The MCP server is **already running** on Railway and connected to Claude.ai via Custom Connector. Below is the complete inventory of what's live, organized by capability.
 
-- **MCP server** deployed on Railway, connected to Claude.ai via Custom Connector
-- **Ten tools** for Reddit scraping, classification, participation guidance, thread origination, narrative mapping, language mining, off-topic cleanup, and subreddit profiling
-- **Six grounding documents** with brand positioning, voice/tone (tightened against AI tells after live testing), Reddit engagement rules, product messaging, ICP personas, and GEO content strategy
-- **Subreddit profiles** auto-injected into participation guides (DB stats + live subreddit rules)
-- **Daily Slack digest** wired up but not yet activated (waiting on webhook)
-- **Reddit account strategy** documented but the actual posting account is not yet warmed (see §8 of ONRAMP_HANDOFF.md)
+### Core MCP server (deployed, in production)
 
-Phase 1 is "Onramp can identify and draft Reddit-native responses to high-priority threads, grounded in your competitive positioning, in 30 seconds per thread, with the right voice." That's working.
+- **FastMCP-based HTTP server** with Bearer-token auth, hosted on Railway, SQLite database on a persistent volume
+- **Eleven tools** available to Claude clients:
+  - `reddit_ingest` — scrape subreddits and keyword searches with parallelized comment fetching
+  - `reddit_ingest_urls` — bulk-ingest specific Reddit URLs with optional peec.ai-style citation metadata
+  - `reddit_search` — query the local thread database with rich filtering
+  - `reddit_classify` — Claude-powered classification with 8-way concurrency (grounding-doc-aware)
+  - `reddit_stats` — aggregate statistics across the database
+  - `reddit_participation_guide` — drafts a Reddit-voice reply with disclosure, competitor protocol, and a subreddit-specific calibration
+  - `reddit_thread_suggest` — generates thread origination ideas (titles + bodies) per persona/topic
+  - `reddit_narrative_map` — competitive narrative analysis across the database
+  - `reddit_language_mine` — extracts the exact phrases buyers use, organized by ICP persona
+  - `reddit_subreddit_profile` — combines DB aggregation with live Reddit subreddit metadata (rules, subscriber count, sidebar)
+  - `reddit_purge_offtopic` — cleans up off-topic noise from broad keyword searches, with dry-run safety
+  - Plus grounding-doc CRUD: `reddit_store_grounding_doc`, `reddit_get_grounding_doc`, `reddit_list_grounding_docs`
+- **Two authentication paths** for compatibility: Bearer header (used by Claude Desktop, Claude Code, mcp-remote) and `?api_key=` query parameter (used by Claude.ai Custom Connector, which does not yet support custom headers)
+- **Auto-deploy from GitHub main** — Onramp can push edits to grounding docs and they ship within ~2 minutes without manual intervention
+- **Persistent SQLite database** mounted at `/data` so threads, classifications, and grounding docs survive every redeploy
+
+### Grounding documents (the brand intelligence layer)
+
+Six markdown documents authored from public research and live-iterated based on actual Reddit output testing:
+
+- **`competitive_positioning.md`** — head-to-head positioning against Payability, Wayflyer, Parker, 8fig, Clearco, Clearbanc, SellersFunding, SellersFi, Viably, Ampla, AccrueMe, Uncapped, Stenn, Kickfurther, Settle, Shopify Capital, Amazon Lending. Plus twelve "forbidden claims" and ten "always-true claims" for safe public use.
+- **`voice_tone.md`** — five brand voice attributes, mandatory formatting rules (no em-dashes, no bold mid-comment, no AI-tell phrases, 150-250 word cap), a rewrite test, and a reference comment that hits the target register exactly. Tightened after the first live participation guide produced AI-sounding output.
+- **`reddit_engagement_rules.md`** — when to engage and skip, ten hard "do nots," disclosure protocols by context, six subreddit-specific rules of thumb, and a four-level escalation protocol.
+- **`product_messaging.md`** — plain-English product description, eligibility criteria, top five capabilities with proof points, top five use cases with seller-voice framing.
+- **`icp_personas.md`** — six ICP personas: `amazon_fba_seller`, `multi_channel_ecommerce`, `dtc_brand_owner`, `shopify_store_owner`, `small_business_owner`, `agency_consultant`. Each with profile, top pains in seller's own words, what they Google, fit criteria, disqualifiers, and trigger events.
+- **`geo_content_strategy.md`** — eight target narratives we want LLMs to associate with Onramp, eight narrative corrections (things LLMs currently get wrong), top twenty target queries, six content pillars, six citation-worthy content formats.
+
+All six load into the database automatically on every server boot. Edit the markdown, push to main, the next redeploy syncs them.
+
+### Performance optimizations (shipped after live load testing)
+
+- **Classification concurrency**: ThreadPoolExecutor with eight concurrent Anthropic calls (env-tunable). A batch of 25 threads classifies in roughly 30-50 seconds instead of timing out the MCP transport.
+- **Comment-fetch concurrency**: ThreadPoolExecutor with three concurrent Reddit fetches sharing a thread-safe rate limiter. A 25-thread ingest with full comment trees runs in ~15-20s instead of ~50s.
+- **Anthropic prompt caching**: Grounding-doc prefixes (~30KB for classification, ~60KB for participation guides) are sent with ephemeral cache markers. First call in a five-minute window is normal speed (cache warm-up). Subsequent calls run 50-70% faster and cost about 90% less in input tokens.
+- **Rate limiter**: Reduced minimum interval from 2 seconds to 1 second between Reddit requests (Reddit's actual unauth budget is 60 req/min, so 1s is the real ceiling). Lock-protected so concurrent workers don't race.
+
+### Voice and tone refinements (live-iterated)
+
+Phase 1 included a first deployment of voice_tone.md, then a real-world test exposed AI tells in the generated drafts. Tightening shipped same-day:
+
+- Mandatory formatting rules block placed at the top of the doc (overrides everything else)
+- Hard 150-250 word cap on opening comments
+- Explicit ban on em-dashes, bold mid-comment, headers, numbered lists with parenthetical labels
+- A "Forbidden Phrases" list of AI tells to strip from drafts ("Happy to answer specifics", "At your scale", "Real talk", etc.)
+- A "Rewrite Test" checklist the model must run before returning a draft
+- A 130-word reference comment showing the target register exactly
+- The same critical rules re-stated at the END of the participation guide prompt (where the model is about to generate output), in addition to being in the grounding doc — rules placed just before generation get more model attention than the same rules buried in 60KB of context
+
+### Subreddit intelligence (Layer 1, just shipped)
+
+Every participation guide now automatically calibrates to the community it's posting in:
+
+- DB-aggregated subreddit profile: topic distribution, persona mix of OPs, competitor mentions with sentiment, top-scoring threads, sample low-scoring threads (for "what doesn't work here" signal), all from our own scraping history
+- Live Reddit metadata: subscriber count, sidebar description, moderator rules — fetched via public JSON endpoints, no OAuth needed
+- The `reddit_subreddit_profile` tool also lets a human ask for this directly: "show me the profile for r/AmazonSeller and compare it to r/Entrepreneur"
+- Layer 2 (top contributor identification, voice profiling) is a Phase 2 item, not yet built
+
+### Data hygiene tools
+
+- **`reddit_purge_offtopic`** — broad keyword searches occasionally surface threads from unrelated subreddits (e.g., a search for "financing" picking up r/PrideandPrejudice). This tool deletes threads from subreddits not in an allowlist, with a dry-run preview and built-in protection for any thread already marked urgent/high priority by the classifier. Off-topic noise can be cleaned up without losing real signal.
+- **Tightened default keyword list** — removed generic terms that pulled garbage on broad Reddit search ("Parker" alone matched Spider-Man content, "Viably" matched any casual use of the word, "Ampla" is defunct after FundThrough acquisition). Replaced with more specific brand names and multi-word concept phrases.
+
+### Slack digest (built, not yet activated)
+
+A standalone `slack_digest.py` script designed to run as a Railway cron job:
+
+- Pulls newly-classified urgent and high-priority threads from the last 24 hours
+- Formats them as a Slack Block Kit message: priority emoji, subreddit, upvotes, comments, title, reasoning, topic/persona/competitors tags
+- Posts to a Slack incoming webhook URL
+- Configurable lookback window, max threads per digest, optional fresh scrape before posting
+
+Not activated yet because Onramp hasn't created the Slack webhook. Five minutes of setup at api.slack.com/apps when ready.
+
+### Documentation
+
+- **`ONRAMP_HANDOFF.md`** — single-page operating manual that opens with a 30-second Quick Start (Claude.ai Connector setup), then covers architecture, deployment reference, the day-one workflow, the daily/weekly/monthly cadence, the nine `[VERIFY]` items pending Onramp confirmation, costs, and what Onramp owns vs. what is reference-only.
+- **`SETUP_BRIEFING.md`** — a self-contained briefing file designed to be pasted into a fresh Claude conversation so Claude can walk a non-engineer through the rest of the setup interactively if needed.
+- **This document** — Phase 2 roadmap for leadership.
 
 ---
 
@@ -45,11 +119,35 @@ Phase 1 is "Onramp can identify and draft Reddit-native responses to high-priori
 - "Profound says our visibility for 'Amazon FBA financing' dropped 12% last week. Cross-reference with our Reddit activity in r/AmazonSeller to see if there's a content gap we can fill."
 - "Generate three Reddit thread ideas (using our existing thread_suggest tool) targeting the queries where Profound shows Onramp visibility is weakest."
 
-**Effort:** Installation only — Onramp already pays for Profound. Connecting it to Claude is a configuration task (~10 min) once you have Profound's MCP endpoint/credentials.
+**Effort:** Installation only. Onramp already pays for Profound. Connecting it to Claude is a configuration task (~10 min) once you have Profound's MCP endpoint and credentials.
 
 **Owner:** Onramp ops / Eric.
 
 **Risk:** Profound's MCP may have rate limits or feature gaps you'd want to negotiate with their team.
+
+#### Architecture decision: federated vs. co-located data
+
+Once Profound's MCP is connected, a question arises: should Profound's data live alongside Reddit data in our SQLite database, or should each MCP stay in its own lane and let Claude join them at query time?
+
+**Recommendation: start federated, sync selectively as patterns emerge.**
+
+Federated means both MCPs connect to Claude independently. Claude is the joining layer. No integration code, no schema decisions, always-fresh data from each source. Each system stays in its lane and we don't break when either side ships a schema change.
+
+Co-located means we run a daily job that pulls Profound data into our local database. Single source of truth, faster queries, server-side joins possible. But: an ETL pipeline to maintain, schema decisions, sync timing, data staleness, and a brittle coupling to Profound's API shape that breaks when they iterate.
+
+The honest tradeoff is that **Claude is good at the join**. Asking "use Reddit MCP to find our highest-engagement subreddits and Profound MCP to find our weakest AI-citation queries, then correlate" works perfectly in a single Claude conversation with both MCPs connected. Building a pipeline to do the same correlation server-side is overkill until you know which correlations are routine enough to automate.
+
+**The phased approach:**
+
+| Month | Action |
+|---|---|
+| Months 1-2 | Both MCPs federated to Claude. No sync. Use them together in conversations. Observe which cross-system queries become routine. |
+| Months 2-3 | Two or three query patterns will emerge as "we ask this every Monday." Those are the patterns worth automating. Build a daily sync of *only* the Profound metrics those queries need. Not all of Profound — just the subset. |
+| Month 3+ | The Slack digest gets enriched with the synced AI-citation data ("top urgent Reddit threads, plus our AI visibility shifted X% in queries Y and Z over the weekend"). The engagement quality tracker (Priority 2) can correlate Reddit comments to AI citation movement on related queries. |
+
+**One exception worth doing immediately:** if Onramp wants long-term archival of their AI visibility scores (in case Profound ever changes retention policy), a lightweight daily snapshot of *just* the per-engine visibility numbers is cheap and high-value. One row per engine per day, ~30 rows/day total, trivial to store. A `track_ai_visibility` table with columns `date, engine, metric, value`. Can ship in a day once Profound API credentials are available.
+
+**The anti-pattern to avoid:** trying to mirror all of Profound into our database from day one. That builds the wrong subset, couples tightly to a v1 schema, and over-engineers before knowing what's valuable.
 
 ---
 
