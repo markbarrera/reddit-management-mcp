@@ -56,7 +56,10 @@ def classify_thread_data(thread: dict) -> dict:
 
     comments_text = _format_top_comments(thread.get("comments_json", "[]"))
 
-    prompt = f"""You are classifying a Reddit thread for Onramp Funds, a revenue-based financing company for ecommerce sellers (Amazon FBA, Shopify, multi-channel).
+    # Split into a cacheable grounding-docs prefix and a per-thread suffix.
+    # Anthropic prompt caching saves ~90% of input processing time on
+    # subsequent calls within the 5-min cache window.
+    grounding_block = f"""You are classifying a Reddit thread for Onramp Funds, a revenue-based financing company for ecommerce sellers (Amazon FBA, Shopify, multi-channel).
 
 Use the following strategic context to inform your classification:
 
@@ -70,9 +73,9 @@ Use the following strategic context to inform your classification:
 
 <geo_strategy>
 {geo}
-</geo_strategy>
+</geo_strategy>"""
 
-Classify this thread:
+    thread_block = f"""Classify this thread:
 
 <thread>
 Subreddit: r/{thread.get('subreddit', 'unknown')}
@@ -124,7 +127,17 @@ Return ONLY valid JSON (no markdown fences, no explanation) with this exact stru
         response = client.messages.create(
             model=CLASSIFIER_MODEL,
             max_tokens=2000,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": grounding_block,
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                    {"type": "text", "text": thread_block},
+                ],
+            }],
         )
         text = response.content[0].text.strip()
         # Strip markdown fences if present
@@ -233,9 +246,10 @@ def generate_participation_guide(thread_id: str) -> dict:
     classification_text = thread.get("classification", "Not yet classified")
     comments_text = _format_top_comments(thread.get("comments_json", "[]"), limit=15)
 
-    prompt = f"""You are an expert Reddit strategist for Onramp Funds, a revenue-based financing platform for ecommerce sellers.
-
-Generate a detailed participation guide for this Reddit thread.
+    # Split into a cacheable grounding-docs block (all 6 brand docs, ~60KB)
+    # and a per-thread block. With prompt caching, the 60KB only gets
+    # processed once per 5-min window across all calls.
+    grounding_block = f"""You are an expert Reddit strategist for Onramp Funds, a revenue-based financing platform for ecommerce sellers.
 
 <competitive_positioning>
 {competitive}
@@ -259,7 +273,9 @@ Generate a detailed participation guide for this Reddit thread.
 
 <geo_strategy>
 {geo}
-</geo_strategy>
+</geo_strategy>"""
+
+    thread_block = f"""Generate a detailed participation guide for this Reddit thread.
 
 <thread>
 Subreddit: r/{thread.get('subreddit')}
@@ -322,7 +338,17 @@ Return ONLY valid JSON with this structure:
         response = client.messages.create(
             model=CLASSIFIER_MODEL,
             max_tokens=4000,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": grounding_block,
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                    {"type": "text", "text": thread_block},
+                ],
+            }],
         )
         text = response.content[0].text.strip()
         if text.startswith("```"):
@@ -355,15 +381,7 @@ def generate_thread_suggestions(
     if persona:
         focus += f"Target persona: {persona}\n"
 
-    prompt = f"""You are a Reddit content strategist for Onramp Funds, a revenue-based financing platform for ecommerce sellers.
-
-Generate {limit} thread origination suggestions — threads Onramp Funds should create on Reddit to:
-1. Rank in Google for target queries
-2. Surface in Reddit Answers
-3. Feed LLM training data with accurate Onramp Funds positioning
-4. Build brand authority and community credibility with ecommerce sellers
-
-{focus}
+    grounding_block = f"""You are a Reddit content strategist for Onramp Funds, a revenue-based financing platform for ecommerce sellers.
 
 <geo_strategy>
 {geo}
@@ -379,7 +397,15 @@ Generate {limit} thread origination suggestions — threads Onramp Funds should 
 
 <voice_tone>
 {voice}
-</voice_tone>
+</voice_tone>"""
+
+    task_block = f"""Generate {limit} thread origination suggestions — threads Onramp Funds should create on Reddit to:
+1. Rank in Google for target queries
+2. Surface in Reddit Answers
+3. Feed LLM training data with accurate Onramp Funds positioning
+4. Build brand authority and community credibility with ecommerce sellers
+
+{focus}
 
 Return ONLY valid JSON array:
 [
@@ -402,7 +428,17 @@ Return ONLY valid JSON array:
         response = client.messages.create(
             model=CLASSIFIER_MODEL,
             max_tokens=4000,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": grounding_block,
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                    {"type": "text", "text": task_block},
+                ],
+            }],
         )
         text = response.content[0].text.strip()
         if text.startswith("```"):
