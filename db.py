@@ -286,6 +286,96 @@ def search_threads(
     return [dict(r) for r in rows]
 
 
+def purge_offtopic_threads(
+    keep_subreddits: list[str],
+    protect_priorities: Optional[list[str]] = None,
+    dry_run: bool = True,
+) -> dict:
+    """Delete threads whose subreddit is not in keep_subreddits.
+
+    Used to clean up off-topic noise from broad keyword searches that
+    happened to surface threads from unrelated subreddits.
+
+    Args:
+        keep_subreddits: Subreddit names to keep (case-insensitive match)
+        protect_priorities: Never delete threads with these participation
+            priorities. Defaults to ['urgent', 'high'] so any human-curated
+            high-value thread survives even if it's in an off-topic sub.
+        dry_run: If True (default), only report what would be deleted.
+            Set False to actually delete.
+
+    Returns:
+        Summary dict with counts and a per-subreddit breakdown of what
+        was (or would be) deleted.
+    """
+    if protect_priorities is None:
+        protect_priorities = ["urgent", "high"]
+
+    keep_lower = {s.lower().lstrip("r/").strip() for s in keep_subreddits}
+    conn = get_db()
+
+    # Find candidates for deletion
+    rows = conn.execute("""
+        SELECT thread_id, subreddit, title, participation_priority
+        FROM reddit_threads
+    """).fetchall()
+
+    to_delete = []
+    protected = []
+    for r in rows:
+        sub_lower = (r["subreddit"] or "").lower()
+        if sub_lower in keep_lower:
+            continue
+        if r["participation_priority"] in protect_priorities:
+            protected.append(dict(r))
+            continue
+        to_delete.append(dict(r))
+
+    # Group counts by subreddit
+    by_sub = {}
+    for t in to_delete:
+        sub = t["subreddit"] or "(unknown)"
+        by_sub[sub] = by_sub.get(sub, 0) + 1
+    by_sub_sorted = sorted(by_sub.items(), key=lambda kv: -kv[1])
+
+    if not dry_run and to_delete:
+        ids = [t["thread_id"] for t in to_delete]
+        placeholders = ",".join("?" for _ in ids)
+        conn.execute(
+            f"DELETE FROM reddit_threads WHERE thread_id IN ({placeholders})",
+            ids,
+        )
+        conn.commit()
+
+    total_remaining = conn.execute(
+        "SELECT COUNT(*) FROM reddit_threads"
+    ).fetchone()[0]
+    conn.close()
+
+    return {
+        "dry_run": dry_run,
+        "deleted_count": len(to_delete) if not dry_run else 0,
+        "would_delete_count": len(to_delete) if dry_run else 0,
+        "protected_count": len(protected),
+        "remaining_threads": total_remaining,
+        "by_subreddit": [
+            {"subreddit": s, "count": c} for s, c in by_sub_sorted[:30]
+        ],
+        "sample_titles": [
+            {"subreddit": t["subreddit"], "title": (t["title"] or "")[:90]}
+            for t in to_delete[:10]
+        ],
+        "protected_sample": [
+            {
+                "subreddit": t["subreddit"],
+                "title": (t["title"] or "")[:90],
+                "priority": t["participation_priority"],
+            }
+            for t in protected[:5]
+        ],
+    }
+
+
 def get_stats(subreddit: Optional[str] = None) -> dict:
     """Get aggregate statistics."""
     conn = get_db()

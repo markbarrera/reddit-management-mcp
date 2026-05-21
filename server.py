@@ -15,6 +15,7 @@ from db import (
     upsert_thread, get_thread, search_threads, get_stats,
     get_unclassified_threads, store_grounding_doc, get_grounding_doc,
     list_grounding_docs, start_scrape_run, complete_scrape_run,
+    purge_offtopic_threads,
 )
 from reddit_scraper import RedditScraper
 from classifier import (
@@ -346,6 +347,55 @@ async def reddit_classify(
         JSON summary with classified count, topics, and priorities
     """
     result = classify_batch(batch_size=batch_size, thread_ids=thread_ids)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool(
+    name="reddit_purge_offtopic",
+    annotations={
+        "title": "Purge Off-Topic Threads",
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    }
+)
+async def reddit_purge_offtopic(
+    keep_subreddits: list[str],
+    protect_priorities: Optional[list[str]] = None,
+    dry_run: bool = True,
+) -> str:
+    """Delete threads from subreddits not in your allowlist.
+
+    Use this to clean up noise from broad keyword searches that pulled
+    threads from unrelated subreddits (e.g. a search for "financing" that
+    returned r/PrideandPrejudice).
+
+    Threads with participation_priority in protect_priorities are never
+    deleted, even if their subreddit isn't in keep_subreddits. This
+    protects any human-curated high-value content.
+
+    ALWAYS run with dry_run=True first to preview what would be deleted.
+    Only set dry_run=False after reviewing the preview.
+
+    Args:
+        keep_subreddits: Subreddits to keep (e.g. ["AmazonSeller",
+            "FulfillmentByAmazon", "ecommerce", "smallbusiness",
+            "Entrepreneur", "shopify"]). Names are case-insensitive and
+            the "r/" prefix is stripped.
+        protect_priorities: Priorities that protect a thread from deletion
+            even if it's off-topic. Default: ["urgent", "high"].
+        dry_run: If True (default), preview only. Set False to actually delete.
+
+    Returns:
+        JSON summary with deleted/would-delete counts, per-subreddit
+        breakdown, and sample titles.
+    """
+    result = purge_offtopic_threads(
+        keep_subreddits=keep_subreddits,
+        protect_priorities=protect_priorities,
+        dry_run=dry_run,
+    )
     return json.dumps(result, indent=2)
 
 
