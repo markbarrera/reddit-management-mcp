@@ -7,7 +7,10 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 import anthropic
 
-from db import get_grounding_doc, get_thread, update_classification, get_unclassified_threads
+from db import (
+    get_grounding_doc, get_thread, update_classification,
+    get_unclassified_threads, get_subreddit_profile_data,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -246,6 +249,14 @@ def generate_participation_guide(thread_id: str) -> dict:
     classification_text = thread.get("classification", "Not yet classified")
     comments_text = _format_top_comments(thread.get("comments_json", "[]"), limit=15)
 
+    # Pull aggregated subreddit profile from our DB so the guide is
+    # calibrated to the community we're posting in, not just the brand
+    # docs. DB-only (no live Reddit calls here) to keep the guide fast.
+    subreddit_profile = get_subreddit_profile_data(thread.get("subreddit") or "")
+    subreddit_profile_json = json.dumps(
+        subreddit_profile, indent=2, default=str
+    )[:4000]
+
     # Split into a cacheable grounding-docs block (all 6 brand docs, ~60KB)
     # and a per-thread block. With prompt caching, the 60KB only gets
     # processed once per 5-min window across all calls.
@@ -285,6 +296,16 @@ Score: {thread.get('score')} | Comments: {thread.get('num_comments')}
 URL: {thread.get('url')}
 Classification: {classification_text}
 </thread>
+
+<subreddit_profile>
+Aggregated profile of r/{thread.get('subreddit')} from our scraping history.
+Use this to calibrate tone, register, and word choice to what this specific
+community responds to. Pay attention to which competitors get mentioned and
+the sentiment around them, the typical persona of the OP in this sub, and
+the topic mix.
+
+{subreddit_profile_json}
+</subreddit_profile>
 
 <comments>
 {comments_text}

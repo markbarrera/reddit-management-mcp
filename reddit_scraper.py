@@ -628,6 +628,62 @@ class RedditScraper:
         )
         return all_threads, errors
 
+    def fetch_subreddit_metadata(self, subreddit: str) -> dict:
+        """Fetch subreddit description, subscriber count, and rules via the
+        public JSON endpoints. No OAuth needed.
+
+        Two requests:
+          /r/{sub}/about.json -> subscriber count, description, sidebar
+          /r/{sub}/about/rules.json -> moderator rules
+
+        Args:
+            subreddit: Subreddit name (without r/ prefix)
+
+        Returns:
+            Dict with metadata fields. Failures are captured in
+            "about_error" / "rules_error" so the caller can still use
+            whatever partial data was retrieved.
+        """
+        sub = subreddit.lstrip("r/").strip()
+        result: dict = {"name": sub}
+
+        try:
+            about = self._request(
+                f"{REDDIT_PUBLIC_BASE}/r/{sub}/about.json"
+            )
+            d = (about or {}).get("data") or {}
+            if d:
+                result["subscriber_count"] = d.get("subscribers")
+                result["active_users"] = d.get("active_user_count")
+                result["public_description"] = (
+                    d.get("public_description") or ""
+                )[:1000]
+                result["description"] = (d.get("description") or "")[:3000]
+                result["over18"] = d.get("over18", False)
+                result["created_utc"] = d.get("created_utc", 0)
+        except Exception as e:
+            logger.error(f"about.json for r/{sub}: {e}")
+            result["about_error"] = str(e)
+
+        try:
+            rules = self._request(
+                f"{REDDIT_PUBLIC_BASE}/r/{sub}/about/rules.json"
+            )
+            rules_list = (rules or {}).get("rules") or []
+            result["rules"] = [
+                {
+                    "short_name": r.get("short_name", ""),
+                    "description": (r.get("description") or "")[:500],
+                    "priority": r.get("priority", 0),
+                }
+                for r in rules_list[:15]
+            ]
+        except Exception as e:
+            logger.error(f"rules.json for r/{sub}: {e}")
+            result["rules_error"] = str(e)
+
+        return result
+
     def close(self):
         """Close the HTTP client."""
         self.client.close()

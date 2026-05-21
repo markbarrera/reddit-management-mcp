@@ -376,6 +376,153 @@ def purge_offtopic_threads(
     }
 
 
+def get_subreddit_profile_data(subreddit: str) -> dict:
+    """Aggregate DB stats for one subreddit into a profile.
+
+    Returns thread counts, score stats, topic distribution, persona mix,
+    competitor mentions with sentiment, top-scoring threads, and a sample
+    of low-scoring threads that included vendor language (for "what
+    doesn't work here" signal).
+
+    Args:
+        subreddit: Subreddit name (case-insensitive, "r/" prefix stripped)
+
+    Returns:
+        Dict with the profile. If no threads exist in DB for the sub,
+        returns a stub with total_threads=0.
+    """
+    sub_lower = (subreddit or "").lower().lstrip("r/").strip()
+    if not sub_lower:
+        return {"subreddit": subreddit, "total_threads_in_db": 0,
+                "message": "Empty subreddit name"}
+
+    conn = get_db()
+
+    row = conn.execute("""
+        SELECT
+            COUNT(*) as total,
+            AVG(score) as avg_score,
+            AVG(num_comments) as avg_comments,
+            MIN(created_utc) as oldest,
+            MAX(created_utc) as newest
+        FROM reddit_threads
+        WHERE LOWER(subreddit) = ?
+    """, (sub_lower,)).fetchone()
+
+    total = row["total"] or 0
+    if total == 0:
+        conn.close()
+        return {
+            "subreddit": subreddit,
+            "total_threads_in_db": 0,
+            "message": "No threads from this subreddit in our DB yet. "
+                       "Run reddit_ingest with this subreddit before "
+                       "building a profile.",
+        }
+
+    topic_counts: dict = {}
+    persona_counts: dict = {}
+    competitor_mentions: dict = {}
+    classified_count = 0
+
+    rows = conn.execute("""
+        SELECT classification
+        FROM reddit_threads
+        WHERE LOWER(subreddit) = ? AND classification IS NOT NULL
+    """, (sub_lower,)).fetchall()
+
+    for r in rows:
+        try:
+            cls = json.loads(r["classification"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        classified_count += 1
+        topic = cls.get("topic")
+        if topic:
+            topic_counts[topic] = topic_counts.get(topic, 0) + 1
+        persona = (cls.get("personas") or {}).get("thread_author")
+        if persona:
+            persona_counts[persona] = persona_counts.get(persona, 0) + 1
+        for c in (cls.get("entities") or {}).get("competitors", []) or []:
+            name = c.get("name")
+            sent = c.get("sentiment", "neutral")
+            if not name:
+                continue
+            entry = competitor_mentions.setdefault(
+                name, {"count": 0, "sentiments": []}
+            )
+            entry["count"] += 1
+            entry["sentiments"].append(sent)
+
+    top_rows = conn.execute("""
+        SELECT thread_id, title, score, num_comments,
+               participation_priority, url
+        FROM reddit_threads
+        WHERE LOWER(subreddit) = ?
+        ORDER BY score DESC
+        LIMIT 5
+    """, (sub_lower,)).fetchall()
+
+    bottom_rows = conn.execute("""
+        SELECT thread_id, title, score, num_comments,
+               participation_priority, url, classification
+        FROM reddit_threads
+        WHERE LOWER(subreddit) = ?
+        ORDER BY score ASC
+        LIMIT 5
+    """, (sub_lower,)).fetchall()
+
+    conn.close()
+
+    return {
+        "subreddit": subreddit,
+        "total_threads_in_db": total,
+        "classified_threads": classified_count,
+        "avg_score": round(row["avg_score"] or 0, 1),
+        "avg_comments": round(row["avg_comments"] or 0, 1),
+        "topic_distribution": sorted(
+            topic_counts.items(), key=lambda x: -x[1]
+        ),
+        "persona_distribution": sorted(
+            persona_counts.items(), key=lambda x: -x[1]
+        ),
+        "competitor_mentions": {
+            name: {
+                "count": data["count"],
+                "sentiment_breakdown": {
+                    s: data["sentiments"].count(s)
+                    for s in sorted(set(data["sentiments"]))
+                },
+            }
+            for name, data in sorted(
+                competitor_mentions.items(), key=lambda x: -x[1]["count"]
+            )[:10]
+        },
+        "top_threads": [
+            {
+                "thread_id": r["thread_id"],
+                "title": (r["title"] or "")[:120],
+                "score": r["score"],
+                "num_comments": r["num_comments"],
+                "priority": r["participation_priority"],
+                "url": r["url"],
+            }
+            for r in top_rows
+        ],
+        "low_score_sample": [
+            {
+                "thread_id": r["thread_id"],
+                "title": (r["title"] or "")[:120],
+                "score": r["score"],
+                "num_comments": r["num_comments"],
+                "priority": r["participation_priority"],
+                "url": r["url"],
+            }
+            for r in bottom_rows
+        ],
+    }
+
+
 def get_stats(subreddit: Optional[str] = None) -> dict:
     """Get aggregate statistics."""
     conn = get_db()

@@ -15,7 +15,7 @@ from db import (
     upsert_thread, get_thread, search_threads, get_stats,
     get_unclassified_threads, store_grounding_doc, get_grounding_doc,
     list_grounding_docs, start_scrape_run, complete_scrape_run,
-    purge_offtopic_threads,
+    purge_offtopic_threads, get_subreddit_profile_data,
 )
 from reddit_scraper import RedditScraper
 from classifier import (
@@ -348,6 +348,57 @@ async def reddit_classify(
     """
     result = classify_batch(batch_size=batch_size, thread_ids=thread_ids)
     return json.dumps(result, indent=2)
+
+
+@mcp.tool(
+    name="reddit_subreddit_profile",
+    annotations={
+        "title": "Subreddit Profile (data + live Reddit metadata)",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    }
+)
+async def reddit_subreddit_profile(
+    subreddit: str,
+    include_reddit_metadata: bool = True,
+) -> str:
+    """Build a profile of a subreddit to inform participation strategy.
+
+    Merges two data sources:
+    - Aggregated stats from our DB: topic distribution, persona mix,
+      competitor mentions with sentiment, top-scoring threads, sample
+      low-scoring threads (for "what doesn't work here" signal).
+    - Live Reddit metadata: subscriber count, sidebar description,
+      moderator rules. Fetched via public JSON endpoints (no OAuth).
+
+    Use this BEFORE generating a participation guide for a subreddit
+    you don't deeply know. The participation guide tool also auto-injects
+    the DB portion of this profile, but calling it directly gives you
+    the live rules and sidebar too.
+
+    Args:
+        subreddit: Subreddit name (without r/ prefix)
+        include_reddit_metadata: If True (default), fetch live subscriber
+            count, sidebar description, and rules from Reddit. Set False
+            to skip network calls and use only DB-aggregated data.
+
+    Returns:
+        JSON with the merged profile.
+    """
+    profile = get_subreddit_profile_data(subreddit)
+    if include_reddit_metadata:
+        scraper = RedditScraper()
+        try:
+            profile["live_reddit_metadata"] = scraper.fetch_subreddit_metadata(
+                subreddit
+            )
+        except Exception as e:
+            profile["live_reddit_metadata_error"] = str(e)
+        finally:
+            scraper.close()
+    return json.dumps(profile, indent=2, default=str)
 
 
 @mcp.tool(
