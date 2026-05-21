@@ -331,7 +331,19 @@ Return ONLY valid JSON with this structure:
     "thread_still_active": true,
     "optimal_post_window": "description of timing"
   }}
-}}"""
+}}
+
+CRITICAL OUTPUT RULES for every suggested_responses[].text field — non-negotiable, the voice_and_tone doc spells these out in detail:
+
+- NO em-dashes. Use commas or split into two sentences. Em-dashes are the #1 AI tell.
+- NO bold text inside the comment. No markdown headers either.
+- NO numbered lists with parenthetical labels. Three dashes max if you must list.
+- 150-250 word HARD CAP for opening comments. If your draft is longer, cut the weakest point entirely.
+- NO forbidden phrases: "Happy to answer specifics", "At your scale", "Real talk", "Hope that helps", "It's worth noting", "The reason I ask is", "The short answer is".
+- Disclose affiliation in one short clause, not a paragraph.
+- End with a question or a concrete operational detail, not an offer to DM.
+
+Before returning the JSON, re-read each suggested response text. If any sentence has an em-dash, bold text, or sounds like a content brief, REWRITE it. The target register is the reference comment in the voice_and_tone grounding doc. Match that, not the polished consultant register you might default to."""
 
     client = anthropic.Anthropic()
     try:
