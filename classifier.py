@@ -286,7 +286,14 @@ def generate_participation_guide(thread_id: str) -> dict:
 {geo}
 </geo_strategy>"""
 
-    thread_block = f"""Generate a detailed participation guide for this Reddit thread.
+    thread_block = f"""CRITICAL INSTRUCTION: DRAFT QUALITY GATE
+Before writing any draft comment, re-read the STOP block at the top of the voice/tone guide.
+Run the 7-item rewrite checklist against every draft before including it in the response.
+Do not return a draft that fails any checklist item. Rewrite it until it passes.
+Each suggested_response.text field must be 200 words or fewer.
+Count the words before returning. If over 200, cut the weakest point and recount.
+
+Generate a detailed participation guide for this Reddit thread.
 
 PROCEDURE FOR EACH DRAFT IN suggested_responses:
 1. Before writing the draft, re-read the STOP block at the top of the voice_and_tone document. Those are not guidelines. They are a hard gate.
