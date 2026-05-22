@@ -514,7 +514,57 @@ async def reddit_participation_guide(
         JSON with full participation recommendation
     """
     result = generate_participation_guide(thread_id)
+
+    # Server-side voice/tone enforcement. Even with the prompt-level rules,
+    # the model can slip. We surface violations to the user instead of
+    # silently shipping bloated or AI-tell-laden drafts.
+    warnings = _check_response_voice(result)
+    if warnings:
+        result["voice_warnings"] = warnings
+
     return json.dumps(result, indent=2)
+
+
+def _check_response_voice(guide: dict) -> list[dict]:
+    """Inspect each suggested_response.text for hard rule violations.
+
+    Returns a list of warnings, one per offending draft. Empty list means
+    every draft passed the gate. The MCP returns the drafts regardless so
+    the user can see what the model produced, but the warnings make
+    violations explicit.
+    """
+    BAD_PHRASES = [
+        "happy to answer specifics", "at your scale", "real talk",
+        "the short answer is", "hope that helps", "it's worth noting",
+        "the reason i ask is", "honestly,", "that said,",
+        "feel free to reach out", "happy to dm",
+    ]
+    warnings = []
+    for i, r in enumerate(guide.get("suggested_responses") or []):
+        text = (r.get("text") or "").strip()
+        if not text:
+            continue
+        issues = []
+        word_count = len(text.split())
+        if word_count > 200:
+            issues.append(f"word_count={word_count} (>200 cap)")
+        if "—" in text:
+            issues.append("contains em-dash")
+        if "**" in text:
+            issues.append("contains bold markdown")
+        if any(line.lstrip().startswith("#") for line in text.splitlines()):
+            issues.append("contains markdown header")
+        lower = text.lower()
+        hits = [p for p in BAD_PHRASES if p in lower]
+        if hits:
+            issues.append(f"AI-tell phrases: {hits}")
+        if issues:
+            warnings.append({
+                "variant_index": i,
+                "variant": r.get("variant"),
+                "issues": issues,
+            })
+    return warnings
 
 
 @mcp.tool(

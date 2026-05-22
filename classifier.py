@@ -288,6 +288,13 @@ def generate_participation_guide(thread_id: str) -> dict:
 
     thread_block = f"""Generate a detailed participation guide for this Reddit thread.
 
+PROCEDURE FOR EACH DRAFT IN suggested_responses:
+1. Before writing the draft, re-read the STOP block at the top of the voice_and_tone document. Those are not guidelines. They are a hard gate.
+2. Write the draft applying those rules during composition, not after. Specifically: keep it under 200 words, no em-dashes, no bold, no markdown headers, no forbidden AI-tell phrases.
+3. Once the draft is written, run the 7-item rewrite gate from the voice_and_tone document against it. Every item must pass.
+4. If any gate item fails, rewrite the draft and re-run the gate. Do not include a draft in suggested_responses that fails any gate item.
+5. If a draft cannot pass all 7 gate items without major rewriting, the underlying response variant is wrong. Change the variant and try again.
+
 <thread>
 Subreddit: r/{thread.get('subreddit')}
 Title: {thread.get('title')}
@@ -354,17 +361,17 @@ Return ONLY valid JSON with this structure:
   }}
 }}
 
-CRITICAL OUTPUT RULES for every suggested_responses[].text field — non-negotiable, the voice_and_tone doc spells these out in detail:
+FINAL CHECK BEFORE RETURNING THE JSON:
 
-- NO em-dashes. Use commas or split into two sentences. Em-dashes are the #1 AI tell.
-- NO bold text inside the comment. No markdown headers either.
-- NO numbered lists with parenthetical labels. Three dashes max if you must list.
-- 150-250 word HARD CAP for opening comments. If your draft is longer, cut the weakest point entirely.
-- NO forbidden phrases: "Happy to answer specifics", "At your scale", "Real talk", "Hope that helps", "It's worth noting", "The reason I ask is", "The short answer is".
-- Disclose affiliation in one short clause, not a paragraph.
-- End with a question or a concrete operational detail, not an offer to DM.
+For each entry in suggested_responses, count the words in the text field. If any draft is over 200 words, you have not followed the procedure. Cut the weakest point and recount until under 200.
 
-Before returning the JSON, re-read each suggested response text. If any sentence has an em-dash, bold text, or sounds like a content brief, REWRITE it. The target register is the reference comment in the voice_and_tone grounding doc. Match that, not the polished consultant register you might default to."""
+Scan each draft text for em-dashes. If you find any, you have not followed the procedure. Rewrite those sentences with commas or by splitting them in two.
+
+Scan each draft text for bold markdown or headers. If you find any, you have not followed the procedure. Strip them.
+
+Scan each draft text for any of these phrases: "Happy to answer specifics", "At your scale", "Real talk", "Hope that helps", "It's worth noting", "The reason I ask is", "The short answer is", "Honestly,", "That said,", "Feel free to reach out", "Happy to DM". If you find any, you have not followed the procedure. Rewrite to remove them.
+
+The target register is the 130-word reference comment in the voice_and_tone grounding doc. Re-read it and compare against each of your drafts. If any draft has more AI fingerprints than the reference comment, rewrite it. Do not return drafts that look more AI-generated than that reference."""
 
     client = anthropic.Anthropic()
     try:
