@@ -178,11 +178,11 @@
 **Good fit for Onramp:**
 - Advises ecommerce sellers in the $3K+/month range
 - Wants a reliable recommendation they can make confidently
-- Interested in a formal referral or ISO partnership
+- Interested in a formal referral or revenue-share partnership (note: as of Q2 2026 the ISO markup model is discontinued — Onramp works with partners through revenue-share only)
 
 **Disqualifiers:**
 - Works exclusively with non-ecommerce businesses
-- Looking for white-label lending [VERIFY: does Onramp offer this?]
+- Looking for white-label lending (Onramp does not offer white-label lending)
 
 **What makes them choose a competitor:**
 - If their clients are all Shopify, recommending Shopify Capital is easiest

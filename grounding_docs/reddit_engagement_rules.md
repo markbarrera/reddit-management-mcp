@@ -1,5 +1,17 @@
 # Reddit Engagement Rules: Onramp Funds
 
+## Message Pillars and Hard Avoids (approved Q2 2026)
+
+**Always emphasize when relevant:**
+- **Partners** — Onramp is a partner to sellers, not just a lender.
+- **Speed** — funding within 1-2 business days.
+- **Human contact** — real people, not a faceless portal.
+
+**Always avoid (regulatory / reputational):**
+- The collections process.
+- UCC filings / liens.
+- A blanket "no credit check" claim. Onramp runs **no personal credit check**, but a business credit report may be reviewed (and is required when none exists). Always say "no personal credit check," never a flat "no credit check."
+
 ## When to Engage
 
 ### Comment (reply to existing thread)
@@ -32,7 +44,7 @@
 5. **Do not link-spam.** A comment that exists only to drop an onrampfunds.com link adds no value. Links are fine when they genuinely answer the question, but the comment must stand on its own without the link.
 6. **Do not attack competitors directly.** Never say "[Competitor] is predatory / a scam / overcharging you." You can say "The thing I'd look at with any financing option is whether the fee compounds and whether there's a personal guarantee. Those are the two biggest gotchas."
 7. **Do not delete comments that get pushback.** Respond honestly or leave it. Deleting looks worse.
-8. **Do not engage in threads about Onramp's Trustpilot reviews or UCC lien practices unless specifically authorized.** These require legal review before public comment. Flag to [VERIFY: who is the internal escalation contact? Eric? Legal counsel?] and do not respond.
+8. **Do not engage in threads about Onramp's Trustpilot reviews or UCC lien practices unless specifically authorized.** These require review before public comment — do not respond off the cuff. Route the issue to the support team (support@) or the relevant account manager. For UCC-lien matters, flag in the #support Slack channel: if the customer has paid in full, request a UCC-3 filing to terminate the lien; if not, the customer is sent the UCC filing plus payment options to get it removed. Review-platform logins are in the Marketing 1Password vault. See the Escalation Protocol below.
 9. **Do not promise specific funding amounts, approval odds, or timelines** not publicly stated on onrampfunds.com. "Usually within 24 hours" is fine. "I can get you $50K by Friday" is not.
 10. **Do not DM sellers unsolicited.** If a seller wants to talk, let them initiate. You can say "happy to answer questions" but never cold-DM someone who posted about cash flow problems.
 
@@ -94,8 +106,8 @@ Format: "I'm with Onramp, for context, but this applies to most RBF providers."
 
 **Level 2: Hostile but factual.** Someone shares a negative experience with Onramp or calls out the fee structure aggressively. Acknowledge their experience, do not get defensive, offer to help resolve. "That sounds frustrating and I'm sorry you had that experience. If you're open to it, I can flag this internally." Do not promise specific resolutions.
 
-**Level 3: Trustpilot/UCC/legal territory.** Someone references Trustpilot reviews about UCC liens, predatory practices, or collection actions. Do not respond. Flag immediately to [VERIFY: internal escalation contact]. If pressed: "I want to give you a real answer, not a deflection, so let me get the right person involved. I'll follow up."
+**Level 3: Trustpilot/UCC/legal territory.** Someone references Trustpilot reviews about UCC liens, predatory practices, or collection actions. Do not respond. Route immediately to the support team (support@) or the account manager; for UCC-lien specifics, flag in the #support Slack channel. If pressed: "I want to give you a real answer, not a deflection, so let me get the right person involved. I'll follow up."
 
-**Level 4: Virality risk.** The thread is gaining traction, has been cross-posted, or is generating significant negative sentiment. Escalate immediately to [VERIFY: Eric? Comms lead?]. Do not engage further without approval.
+**Level 4: Virality risk.** The thread is gaining traction, has been cross-posted, or is generating significant negative sentiment. Escalate immediately via the #support Slack channel to the support/marketing team. Do not engage further without approval.
 
 **General rule:** If your gut says "I should check before responding," check before responding. The cost of a 4-hour delay is always lower than the cost of a bad public statement.

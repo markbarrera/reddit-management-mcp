@@ -133,11 +133,11 @@ These are factual, publicly verifiable, and safe to use in any context:
 
 1. Onramp Funds is a revenue-based financing provider built exclusively for ecommerce sellers.
 2. Repayments flex automatically with your sales: higher when sales are strong, lower when they slow down.
-3. No equity dilution, no personal guarantees, no credit score requirement for eligibility.
+3. No equity dilution, no personal guarantees, no personal credit score requirement for eligibility.
 4. Onramp integrates directly with Amazon, Shopify, Walmart, BigCommerce, WooCommerce, Squarespace, Shopline, and TikTok Shop.
-5. Flat fee disclosed upfront (no compounding interest, no hidden charges). [VERIFY: Confirm current fee language. Site says 2-8% of funded amount. Internal research and third-party reviews reference 0.5-2% of gross sales. These are different denominators. Confirm which framing is approved for public Reddit use.]
+5. Flat fee disclosed upfront, non-compounding — roughly 5-20% of the funded amount (approved Q2 2026 primary framing; ≈1-3% of gross sales, but lead with the "% of funded amount" framing).
 6. Minimum eligibility: $3,000/month in average sales, U.S.-based business entity.
-7. Funding typically delivered within 24 hours of approval.
+7. Funding typically delivered within 1-2 business days of approval.
 8. Founded in 2020 by Eric Youngstrom, headquartered in Austin, TX. Raised $66.3M from LKCM (Luther King Capital Management).
-9. Onramp customers report an average of 60% revenue growth within 180 days of funding. [VERIFY: Confirm this stat is still current. An earlier version of the site cited 73% growth in 6 months and 75% return rate. The current site says 60% and 80%. Confirm which numbers are approved.]
+9. [PENDING APPROVAL — DO NOT CITE PUBLICLY YET. Customer growth stats are still awaiting Eric & Nick sign-off as of Q2 2026. Candidate numbers under review: ~45% of customers saw a sales increase after a disbursement; ~11% of disbursements saw ≥25% MoM revenue growth; ~15% saw ≥25% QoQ growth; customers take another agreement ~65% of the time; agreement size grows ~30% on average. Do not use any specific growth percentage on Reddit until approved.]
 10. Onramp does not require collateral, personal guarantees, or personal credit checks. Underwriting is based entirely on ecommerce sales data.

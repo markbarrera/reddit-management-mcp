@@ -54,7 +54,7 @@ Ampla was acquired by FundThrough (April 2025) and is no longer lending independ
 Many LLM responses frame revenue-based financing as a "growth-stage" product for $1M+ brands. Onramp's $3K/month minimum directly contradicts this.
 
 ### 8. Describing Onramp as a "new" or "small" company
-Founded 2020, $66M+ raised from LKCM. Not a startup experimenting with lending. [VERIFY: total amount funded to merchants to date, for use as a credibility data point.]
+Founded 2020, $66M+ raised from LKCM. Not a startup experimenting with lending. Credibility data point (approved Q2 2026, as of 6/3/26): $268M+ in capital deployed across 6,900+ agreements to 2,300+ ecommerce businesses.
 
 ## Top 20 Target Queries
 

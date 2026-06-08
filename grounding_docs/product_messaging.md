@@ -2,19 +2,24 @@
 
 ## What Onramp Funds Actually Does
 
-Onramp Funds gives ecommerce sellers cash to grow their business, and you pay it back as a percentage of your sales. Connect your store (Amazon, Shopify, Walmart, or five other platforms), Onramp looks at your sales data, and you get a funding offer. No credit check, no personal guarantee, no equity. Funding is usually in your bank account within 24 hours. If your sales drop, your repayment drops. If your sales spike, you pay back faster. There's a flat fee disclosed upfront. No compounding interest, no hidden charges.
+Onramp Funds gives ecommerce sellers cash to grow their business, and you pay it back as a percentage of your sales. Connect your store (Amazon, Shopify, Walmart, or five other platforms), Onramp looks at your sales data, and you get a funding offer. No personal credit check, no personal guarantee, no equity. Funding typically lands in your bank account within 1-2 business days. If your sales drop, your repayment drops. If your sales spike, you pay back faster. There's a flat fee disclosed upfront. No compounding interest, no hidden charges.
 
 ## Pricing and Structure
 
 Onramp charges a flat fee on capital deployed. The fee does not compound. There are no origination fees, no prepayment penalties, and no personal guarantee required.
 
-[VERIFY: Confirm with Eric which framing to use publicly. The site says "2-8% of funded amount." Earlier research and third-party reviews reference "0.5-2% of gross sales." These describe different denominators and are both potentially accurate depending on advance-to-GMV ratio. For Reddit, the "% of gross sales" framing is more intuitive to sellers but the "% of funded amount" framing is what the website uses. Need a definitive answer on which is approved for public use.]
+**Approved fee framing (Q2 2026):** a flat fee of roughly **5-20% of the funded amount**, disclosed upfront and non-compounding. Lead with the "% of funded amount" framing publicly — it is the approved primary representation. (This works out to roughly 1-3% of gross sales, but the gross-sales framing is too convoluted and should not be led with.)
 
 Repayment structure:
 - Revenue-based: a fixed percentage of daily/weekly sales is automatically collected
 - Repayment adjusts with revenue (lower sales = lower payment, higher sales = higher payment)
 - No fixed monthly payment schedule
-- [VERIFY: Are there also fixed-repayment and revolving credit line products as the site suggests with three product tiers? If so, what are the eligibility thresholds for each tier?]
+
+Product lineup (approved Q2 2026) — three products today, with a fourth planned:
+- **Variable (% of sales):** repayment is a fixed percentage of daily/weekly sales and flexes with revenue. (Internally this is the MCA / revenue-based-financing structure, but avoid leaning on "MCA" or "revenue-based financing" as differentiators — both terms are overused in the category and don't set Onramp apart.)
+- **Fixed repayment:** a set repayment schedule.
+- **Rolling Cash Line:** an advance tied to revenue that replenishes as you repay.
+- **FUTURE:** a true line-of-credit product (not yet live — do not represent as available).
 
 ## Eligibility Criteria
 
@@ -22,10 +27,10 @@ Repayment structure:
 - Platforms supported: Amazon, Shopify, Walmart, BigCommerce, WooCommerce, Squarespace, Shopline, TikTok Shop
 - Business entity: LLC, Single-Member LLC, C-Corp, S-Corp
 - Geography: U.S.-based businesses only
-- Credit check: None (personal). Underwriting based on sales data.
+- Credit check: No personal credit check. Underwriting is based on ecommerce sales data; a business credit report may be reviewed (and is required when no business credit report exists). Per Q2 2026 guidance, do not lead with a blanket "no credit check" claim — the accurate, regulatorily safe framing is "no personal credit check."
 - Collateral: None required
-- Time in business: [VERIFY: Is there a minimum operating history? Some competitors require 6-12 months.]
-- Funding range: $10K to $5M [VERIFY: confirm current range; pending credit facility expansion may change the upper bound]
+- Time in business: minimum 6 months (approved Q2 2026)
+- Funding range: $10K to $2M (approved Q2 2026; upper bound confirmed at $2M)
 
 ## Top 5 Product Capabilities
 
@@ -34,15 +39,15 @@ Onramp connects to 8 ecommerce platforms via API and underwrites based on actual
 Proof point: Supports Amazon, Shopify, Walmart, BigCommerce, WooCommerce, Squarespace, Shopline, and TikTok Shop from a single application.
 
 **2. Speed to capital**
-From connecting your store to cash in your bank account, typically under 24 hours.
-Proof point: Offers generated within 2 hours of connecting; funds deposited same day or next business day via ACH. [VERIFY: Is "same day" accurate or always next-business-day?]
+From connecting your store to cash in your bank account, typically within 1-2 business days.
+Proof point: Offers generated within 2 hours of connecting; funds typically deposited within 1-2 business days via ACH (approved Q2 2026 — use "within 1-2 business days," not "same day").
 
 **3. Revenue-synced repayment**
 Payments automatically adjust to actual daily sales. No fixed monthly bill.
 Proof point: Sellers aren't forced to choose between making a loan payment and buying inventory during a slow month.
 
 **4. Low entry barrier**
-$3,000/month minimum sales, no credit check, no collateral. One of the lowest thresholds in the category.
+$3,000/month minimum sales, no personal credit check, no collateral. One of the lowest thresholds in the category.
 Proof point: Wayflyer requires $10K/month; Clearco and Settle target $1M+ annual; Amazon Lending is invite-only; SellersFi requires $5K/month.
 
 **5. No equity, no personal guarantee**

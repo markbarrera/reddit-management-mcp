@@ -139,19 +139,27 @@ Paste these into Claude after connecting:
 
 ---
 
-## Items flagged for Onramp review
+## Items flagged for Onramp review — resolved Q2 2026
 
-The grounding docs contain `[VERIFY: ...]` markers where internal confirmation is needed before public Reddit use:
+The grounding docs previously carried `[VERIFY: ...]` markers. These were resolved against the **Onramp Positioning Working Doc (Q2 2026)** and the 6/3/26 portfolio loan tape. Status:
 
-1. **Fee framing** — site says "2-8% of funded amount" vs. third-party "0.5-2% of gross sales." Which is approved for public Reddit?
-2. **Product tiers** — does Onramp offer fixed-repayment / revolving credit-line products beyond pure RBF?
-3. **Minimum time in business** — is there one? (competitors require 6-12 months)
-4. **Funding range** — confirm $10K-$5M, or different post-credit-facility-expansion?
-5. **Speed claim** — "same day" or always "next business day" ACH?
-6. **Growth stats** — 60% in 180 days / 80% return rate (current site) vs. 73% / 75% (older site). Which is canonical?
-7. **Total funded to merchants to date** — credibility data point if available
-8. **Internal escalation contact** for Trustpilot/UCC/legal threads — Eric? Counsel? Comms lead?
-9. **White-label / ISO program** for agencies — does this exist?
+| # | Item | Decision |
+|---|------|----------|
+| 1 | **Fee framing** | Flat fee of ~**5-20% of funded amount** (approved primary framing). ≈1-3% of gross sales, but lead with "% of funded amount." |
+| 2 | **Product tiers** | Three products today — Variable (% of sales), Fixed repayment, Rolling Cash Line. True line of credit is future/not live. Avoid leaning on "MCA"/"revenue-based financing" as differentiators (overused). |
+| 3 | **Minimum time in business** | **6 months.** |
+| 4 | **Funding range** | **$10K to $2M** (upper bound confirmed at $2M). |
+| 5 | **Speed claim** | **Within 1-2 business days** via ACH (not "same day"). |
+| 6 | **Growth stats** | ⏳ **STILL PENDING** — awaiting Eric & Nick sign-off. Candidate numbers are in `competitive_positioning.md` marked "do not cite publicly yet." Do not use any specific growth % on Reddit until approved. |
+| 7 | **Total funded to date** | **$268M+ deployed across 6,900+ agreements to 2,300+ ecommerce businesses** (as of 6/3/26). Approved as a credibility data point. |
+| 8 | **Escalation route** (Trustpilot/UCC/legal) | Don't respond off the cuff. Route to support@ or the account manager; for UCC liens, flag in the **#support** Slack channel (paid-in-full → request UCC-3 to terminate; not paid → customer gets UCC filing + payment options). Review logins in Marketing 1Password vault. |
+| 9 | **White-label / ISO program** | No white-label lending. ISO markup is discontinued — partners work through **revenue-share only**. |
+
+**Also decided (regulatory must-avoids):** always emphasize partners, speed, human contact; always avoid discussing the collections process, UCC filings, and blanket "no credit check" claims (use "no personal credit check"). Reflected in `reddit_engagement_rules.md`.
+
+**Still open / In Progress (not blocking):**
+- **Growth stats** (item 6 above) — pending Eric & Nick.
+- **Category self-identification term** — "revenue-based financing" vs. alternatives ("eCommerce Growth Capital Platform," "On-Demand Capital Partner," etc.). Eric leans "financing / legit bank partner." Left as-is in the docs until a final label is chosen.
 
 To update any doc: edit the markdown in `grounding_docs/`, push, redeploy. The startup hook re-seeds on every boot.
 
