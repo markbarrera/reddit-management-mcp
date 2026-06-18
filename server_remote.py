@@ -87,16 +87,28 @@ async def app(scope, receive, send):
     if scope["type"] == "http":
         path = scope.get("path", "")
 
-        # Health check - no auth required
+        # Health check - no auth required.
+        # The DB read is wrapped so a transient SQLite hiccup (cold boot,
+        # WAL recovery, slow seed) can never fail Railway's health check and
+        # trip the restart loop. The process/transport are up regardless of
+        # whether the DB read succeeds, so we stay 200 and report "degraded".
         if path == "/health":
-            from db import get_stats
-            stats = get_stats()
-            await _json_response(send, {
-                "status": "healthy",
-                "service": "onramp-funds-reddit-intelligence",
-                "threads_in_db": stats.get("total_threads", 0),
-                "classified": stats.get("classified", 0),
-            })
+            try:
+                from db import get_stats
+                stats = get_stats()
+                await _json_response(send, {
+                    "status": "healthy",
+                    "service": "onramp-funds-reddit-intelligence",
+                    "threads_in_db": stats.get("total_threads", 0),
+                    "classified": stats.get("classified", 0),
+                })
+            except Exception as e:
+                logger.warning(f"Health check DB read failed: {e}")
+                await _json_response(send, {
+                    "status": "degraded",
+                    "service": "onramp-funds-reddit-intelligence",
+                    "error": "database read failed",
+                })
             return
 
         # Root info - no auth required
