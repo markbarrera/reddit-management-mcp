@@ -8,6 +8,7 @@ in Onramp Funds' brand knowledge and competitive strategy.
 import json
 import logging
 import os
+import re
 from typing import Optional
 from mcp.server.fastmcp import FastMCP
 
@@ -525,39 +526,66 @@ async def reddit_participation_guide(
     return json.dumps(result, indent=2)
 
 
-def _check_response_voice(guide: dict) -> list[dict]:
-    """Inspect each suggested_response.text for hard rule violations.
+# Full forbidden AI-tell phrase list from grounding_docs/voice_tone.md.
+# Lowercased for case-insensitive substring matching.
+_FORBIDDEN_PHRASES = [
+    "happy to answer specifics",
+    "at your scale",
+    "real talk",
+    "the short answer is",
+    "hope that helps",
+    "it's worth noting",
+    "what i mean by that is",
+    "the reason i ask is",
+    "honestly,",
+    "that said,",
+    "feel free to reach out",
+    "happy to dm",
+    "it really depends",
+]
 
-    Returns a list of warnings, one per offending draft. Empty list means
-    every draft passed the gate. The MCP returns the drafts regardless so
-    the user can see what the model produced, but the warnings make
-    violations explicit.
+# "Words and Phrases to Avoid" list from voice_tone.md. Matched on word
+# boundaries to avoid false positives (e.g. "resolution" must not trip
+# "solution"). These are softer than the hard gate but the docs still ask
+# us to keep them out of comments.
+_MARKETING_WORDS = [
+    "solution", "solutions", "leverage", "empower", "enable", "unlock",
+    "industry-leading", "best-in-class", "disrupting", "revolutionizing",
+    "we're excited to announce", "reach out to us", "tailored", "bespoke",
+    "seamless", "innovative",
+]
+
+# Disclosure markers that satisfy the "affiliation disclosed" gate when a
+# draft names Onramp.
+_DISCLOSURE_MARKERS = [
+    "i work at onramp", "i'm at onramp", "i am at onramp",
+    "i'm with onramp", "i am with onramp", "i work in ecommerce financing",
+    "disclosure:", "i'm biased", "i am biased", "full disclosure",
+]
+
+# Endings that take the conversation private instead of closing on a real
+# question or a concrete operational detail (7-item gate, item 7).
+_PRIVATE_CONVERSATION_ENDINGS = [
+    "happy to dm", "feel free to reach out", "reach out", "dm me",
+    "shoot me a dm", "send me a dm", "hit me up", "happy to chat",
+]
+
+
+def _check_response_voice(guide: dict) -> list[dict]:
+    """Inspect each suggested_response.text for voice/tone rule violations.
+
+    Validates every hard-gate rule defined in grounding_docs/voice_tone.md
+    (the STOP block plus the 7-item rewrite gate), not just a subset. Returns
+    a list of warnings, one per offending draft. Empty list means every draft
+    passed the gate. The MCP returns the drafts regardless so the user can see
+    what the model produced, but the warnings make violations explicit.
     """
-    BAD_PHRASES = [
-        "happy to answer specifics", "at your scale", "real talk",
-        "the short answer is", "hope that helps", "it's worth noting",
-        "the reason i ask is", "honestly,", "that said,",
-        "feel free to reach out", "happy to dm",
-    ]
     warnings = []
     for i, r in enumerate(guide.get("suggested_responses") or []):
         text = (r.get("text") or "").strip()
         if not text:
             continue
-        issues = []
-        word_count = len(text.split())
-        if word_count > 200:
-            issues.append(f"word_count={word_count} (>200 cap)")
-        if "—" in text:
-            issues.append("contains em-dash")
-        if "**" in text:
-            issues.append("contains bold markdown")
-        if any(line.lstrip().startswith("#") for line in text.splitlines()):
-            issues.append("contains markdown header")
-        lower = text.lower()
-        hits = [p for p in BAD_PHRASES if p in lower]
-        if hits:
-            issues.append(f"AI-tell phrases: {hits}")
+        issues = _voice_issues(text)
         if issues:
             warnings.append({
                 "variant_index": i,
@@ -565,6 +593,81 @@ def _check_response_voice(guide: dict) -> list[dict]:
                 "issues": issues,
             })
     return warnings
+
+
+def _voice_issues(text: str) -> list[str]:
+    """Return the list of voice/tone gate violations for a single draft."""
+    issues = []
+    lower = text.lower()
+    lines = text.splitlines()
+    # Non-quoted lines only (Reddit quotes start with ">"); some rules
+    # explicitly exempt quoted material.
+    non_quote = [ln for ln in lines if not ln.lstrip().startswith(">")]
+    non_quote_text = "\n".join(non_quote)
+
+    # --- STOP block: hard formatting gate ---
+    word_count = len(text.split())
+    if word_count > 200:
+        issues.append(f"word_count={word_count} (>200 cap)")
+    if "—" in text or "–" in text:
+        issues.append("contains em-dash")
+    if "**" in text or "__" in text:
+        issues.append("contains bold markdown")
+    if any(line.lstrip().startswith("#") for line in lines):
+        issues.append("contains markdown header")
+    # Numbered/lettered list with parenthetical labels: "1)", "(1)", "a)".
+    # Two or more enumerators signal a list (a lone "1)" can occur in prose).
+    if len(re.findall(r"(?:^|\s)\(?[0-9a-z]{1,2}\)\s", text, re.IGNORECASE)) >= 2:
+        issues.append("contains numbered/parenthetical list")
+    # Exclamation points, unless quoting someone else.
+    if "!" in non_quote_text:
+        issues.append("contains exclamation point (outside a quote)")
+    # Three-part listicle structure: First... Second... Third...
+    _seq = lambda w: re.search(r"(?im)(^|[.!?]\s+|\n)\s*" + w + r"\b", text)
+    if _seq("first") and _seq("second") and _seq("third"):
+        issues.append("three-part listicle structure (First/Second/Third)")
+    # Rhetorical quotes around stock phrases.
+    rhetorical = [
+        p for p in ("real talk", "the thing is", "honestly", "to be honest")
+        if re.search(r'["“]\s*' + re.escape(p), lower)
+    ]
+    if rhetorical:
+        issues.append(f"rhetorical quoted phrases: {rhetorical}")
+
+    # --- Forbidden AI-tell phrases ---
+    hits = [p for p in _FORBIDDEN_PHRASES if p in lower]
+    if hits:
+        issues.append(f"AI-tell phrases: {hits}")
+
+    # --- Marketing words to avoid ---
+    marketing = [
+        w for w in _MARKETING_WORDS
+        if re.search(r"\b" + re.escape(w) + r"\b", lower)
+    ]
+    if marketing:
+        issues.append(f"marketing language to avoid: {marketing}")
+
+    # --- 7-item gate, item 6: affiliation disclosure ---
+    if "onramp" in lower:
+        if not any(m in lower for m in _DISCLOSURE_MARKERS):
+            issues.append("names Onramp without affiliation disclosure")
+        else:
+            # Disclosure should be one short clause, not a paragraph.
+            for sentence in re.split(r"(?<=[.!?])\s+", text):
+                sl = sentence.lower()
+                if any(m in sl for m in _DISCLOSURE_MARKERS) and len(sentence.split()) > 25:
+                    issues.append("affiliation disclosure too long (one short clause expected)")
+                    break
+
+    # --- 7-item gate, item 7: ending ---
+    # Last sentence should be a real question or concrete detail, not an
+    # offer to take the conversation private.
+    sentences = [s for s in re.split(r"(?<=[.!?])\s+", text.strip()) if s.strip()]
+    ending = " ".join(sentences[-1:]).lower() if sentences else ""
+    if any(p in ending for p in _PRIVATE_CONVERSATION_ENDINGS):
+        issues.append("ends with a private-conversation offer (gate item 7)")
+
+    return issues
 
 
 @mcp.tool(
