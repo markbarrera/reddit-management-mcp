@@ -575,99 +575,146 @@ def _check_response_voice(guide: dict) -> list[dict]:
     """Inspect each suggested_response.text for voice/tone rule violations.
 
     Validates every hard-gate rule defined in grounding_docs/voice_tone.md
-    (the STOP block plus the 7-item rewrite gate), not just a subset. Returns
-    a list of warnings, one per offending draft. Empty list means every draft
-    passed the gate. The MCP returns the drafts regardless so the user can see
-    what the model produced, but the warnings make violations explicit.
+    (the STOP block plus the 7-item rewrite gate). Each draft is checked in
+    "comment" mode. Returns a list of warnings, one per offending draft, with
+    hard-gate failures and softer style warnings kept separate. Empty list
+    means every draft passed clean. The MCP returns the drafts regardless so
+    the user can see what the model produced.
     """
     warnings = []
     for i, r in enumerate(guide.get("suggested_responses") or []):
         text = (r.get("text") or "").strip()
         if not text:
             continue
-        issues = _voice_issues(text)
-        if issues:
+        block = _voice_warning_block(text, mode="comment")
+        if block:
             warnings.append({
                 "variant_index": i,
                 "variant": r.get("variant"),
-                "issues": issues,
+                **block,
             })
     return warnings
 
 
-def _voice_issues(text: str) -> list[str]:
-    """Return the list of voice/tone gate violations for a single draft."""
-    issues = []
+def _voice_warning_block(text: str, mode: str) -> Optional[dict]:
+    """Return a warning block for a draft, or None if it passes clean.
+
+    The block separates hard-gate failures (which make a draft non-returnable
+    per voice_tone.md) from softer style warnings (the "words to avoid" list
+    and disclosure-length nits). `passes_gate` keys off hard failures only.
+    """
+    result = _voice_issues(text, mode=mode)
+    if not (result["hard"] or result["soft"]):
+        return None
+    return {
+        "passes_gate": not result["hard"],
+        "hard_violations": result["hard"],
+        "soft_warnings": result["soft"],
+    }
+
+
+def _voice_issues(text: str, mode: str = "comment") -> dict:
+    """Return {"hard": [...], "soft": [...]} of voice/tone violations.
+
+    mode="comment" (opening comments): the full STOP block plus the 7-item
+        rewrite gate from voice_tone.md, including the comment-specific rules
+        (200-word cap, no headers, no numbered lists, ending check).
+    mode="post" (thread origination bodies): the format-agnostic AI tells
+        only. The comment-specific structural rules are dropped because a
+        300-500 word post legitimately uses headers and light structure; a
+        runaway-length guard replaces the 200-word cap.
+    """
+    hard: list[str] = []
+    soft: list[str] = []
     lower = text.lower()
     lines = text.splitlines()
     # Non-quoted lines only (Reddit quotes start with ">"); some rules
     # explicitly exempt quoted material.
-    non_quote = [ln for ln in lines if not ln.lstrip().startswith(">")]
-    non_quote_text = "\n".join(non_quote)
+    non_quote_text = "\n".join(
+        ln for ln in lines if not ln.lstrip().startswith(">")
+    )
 
-    # --- STOP block: hard formatting gate ---
-    word_count = len(text.split())
-    if word_count > 200:
-        issues.append(f"word_count={word_count} (>200 cap)")
+    # --- Format-agnostic AI tells (apply to comments and posts) ---
     if "—" in text or "–" in text:
-        issues.append("contains em-dash")
+        hard.append("contains em-dash")
     if "**" in text or "__" in text:
-        issues.append("contains bold markdown")
-    if any(line.lstrip().startswith("#") for line in lines):
-        issues.append("contains markdown header")
-    # Numbered/lettered list with parenthetical labels: "1)", "(1)", "a)".
-    # Two or more enumerators signal a list (a lone "1)" can occur in prose).
-    if len(re.findall(r"(?:^|\s)\(?[0-9a-z]{1,2}\)\s", text, re.IGNORECASE)) >= 2:
-        issues.append("contains numbered/parenthetical list")
-    # Exclamation points, unless quoting someone else.
+        hard.append("contains bold markdown")
     if "!" in non_quote_text:
-        issues.append("contains exclamation point (outside a quote)")
-    # Three-part listicle structure: First... Second... Third...
+        hard.append("contains exclamation point (outside a quote)")
     _seq = lambda w: re.search(r"(?im)(^|[.!?]\s+|\n)\s*" + w + r"\b", text)
     if _seq("first") and _seq("second") and _seq("third"):
-        issues.append("three-part listicle structure (First/Second/Third)")
-    # Rhetorical quotes around stock phrases.
+        hard.append("three-part listicle structure (First/Second/Third)")
     rhetorical = [
         p for p in ("real talk", "the thing is", "honestly", "to be honest")
         if re.search(r'["“]\s*' + re.escape(p), lower)
     ]
     if rhetorical:
-        issues.append(f"rhetorical quoted phrases: {rhetorical}")
-
-    # --- Forbidden AI-tell phrases ---
+        hard.append(f"rhetorical quoted phrases: {rhetorical}")
     hits = [p for p in _FORBIDDEN_PHRASES if p in lower]
     if hits:
-        issues.append(f"AI-tell phrases: {hits}")
+        hard.append(f"AI-tell phrases: {hits}")
 
-    # --- Marketing words to avoid ---
-    marketing = [
-        w for w in _MARKETING_WORDS
-        if re.search(r"\b" + re.escape(w) + r"\b", lower)
-    ]
-    if marketing:
-        issues.append(f"marketing language to avoid: {marketing}")
+    # --- Comment-specific structural rules ---
+    if mode == "comment":
+        word_count = len(text.split())
+        if word_count > 200:
+            hard.append(f"word_count={word_count} (>200 cap)")
+        if any(line.lstrip().startswith("#") for line in lines):
+            hard.append("contains markdown header")
+        # Numbered/lettered list with parenthetical labels: "1)", "(1)", "a)".
+        # Two or more enumerators signal a list (a lone "1)" can occur in prose).
+        if len(re.findall(r"(?:^|\s)\(?[0-9a-z]{1,2}\)\s", text, re.IGNORECASE)) >= 2:
+            hard.append("contains numbered/parenthetical list")
+        # 7-item gate, item 7: last sentence should be a real question or a
+        # concrete detail, not an offer to take the conversation private.
+        sentences = [s for s in re.split(r"(?<=[.!?])\s+", text.strip()) if s.strip()]
+        ending = sentences[-1].lower() if sentences else ""
+        if any(p in ending for p in _PRIVATE_CONVERSATION_ENDINGS):
+            hard.append("ends with a private-conversation offer (gate item 7)")
+    else:  # mode == "post"
+        word_count = len(text.split())
+        if word_count > 550:
+            hard.append(f"word_count={word_count} (>550 runaway guard; target 300-500)")
 
-    # --- 7-item gate, item 6: affiliation disclosure ---
+    # --- Affiliation disclosure (both modes) ---
     if "onramp" in lower:
         if not any(m in lower for m in _DISCLOSURE_MARKERS):
-            issues.append("names Onramp without affiliation disclosure")
+            hard.append("names Onramp without affiliation disclosure")
         else:
             # Disclosure should be one short clause, not a paragraph.
             for sentence in re.split(r"(?<=[.!?])\s+", text):
                 sl = sentence.lower()
                 if any(m in sl for m in _DISCLOSURE_MARKERS) and len(sentence.split()) > 25:
-                    issues.append("affiliation disclosure too long (one short clause expected)")
+                    soft.append("affiliation disclosure longer than one short clause")
                     break
 
-    # --- 7-item gate, item 7: ending ---
-    # Last sentence should be a real question or concrete detail, not an
-    # offer to take the conversation private.
-    sentences = [s for s in re.split(r"(?<=[.!?])\s+", text.strip()) if s.strip()]
-    ending = " ".join(sentences[-1:]).lower() if sentences else ""
-    if any(p in ending for p in _PRIVATE_CONVERSATION_ENDINGS):
-        issues.append("ends with a private-conversation offer (gate item 7)")
+    # --- Soft: marketing "words to avoid" (both modes) ---
+    marketing = [
+        w for w in _MARKETING_WORDS
+        if re.search(r"\b" + re.escape(w) + r"\b", lower)
+    ]
+    if marketing:
+        soft.append(f"marketing language to avoid: {marketing}")
 
-    return issues
+    return {"hard": hard, "soft": soft}
+
+
+def _check_thread_voice(suggestions) -> None:
+    """Attach a voice_warnings block to any thread suggestion that violates a
+    rule. Checked in "post" mode. Mutates each offending suggestion in place
+    so the returned JSON stays an array of suggestions.
+    """
+    if not isinstance(suggestions, list):
+        return
+    for s in suggestions:
+        if not isinstance(s, dict):
+            continue
+        text = (s.get("body_draft") or "").strip()
+        if not text:
+            continue
+        block = _voice_warning_block(text, mode="post")
+        if block:
+            s["voice_warnings"] = block
 
 
 @mcp.tool(
@@ -707,6 +754,13 @@ async def reddit_thread_suggest(
     suggestions = generate_thread_suggestions(
         topic=topic, persona=persona, limit=limit,
     )
+
+    # Server-side voice/tone enforcement on each body draft. Thread bodies are
+    # posts, not opening comments, so they are checked in "post" mode: the
+    # format-agnostic AI tells apply, but the comment-specific structural rules
+    # (200-word cap, no headers, no numbered lists) do not.
+    _check_thread_voice(suggestions)
+
     return json.dumps(suggestions, indent=2)
 
 
