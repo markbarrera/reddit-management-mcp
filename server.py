@@ -769,6 +769,16 @@ async def reddit_participation_guide(
     if warnings:
         result["voice_warnings"] = warnings
 
+    # Shopify Community no-links-ever operating decision (see
+    # shopify_community_engagement_rules.md) applies to suggested_links too,
+    # not just the draft text — flag rather than silently drop, so a human
+    # reviews it instead of it slipping through unnoticed.
+    if result.get("platform") == "shopify_community" and result.get("suggested_links"):
+        result["link_policy_warning"] = (
+            "Shopify Community is a no-links-ever platform, but the model "
+            "returned suggested_links anyway. Do not use them."
+        )
+
     return json.dumps(result, indent=2)
 
 
@@ -826,13 +836,19 @@ def _check_response_voice(guide: dict) -> list[dict]:
     hard-gate failures and softer style warnings kept separate. Empty list
     means every draft passed clean. The MCP returns the drafts regardless so
     the user can see what the model produced.
+
+    Shopify Community drafts (guide["platform"] == "shopify_community") are
+    additionally checked against the no-links-ever operating decision in
+    shopify_community_engagement_rules.md — a link there is a hard violation
+    even though it would be fine on Reddit.
     """
+    no_links = guide.get("platform") == "shopify_community"
     warnings = []
     for i, r in enumerate(guide.get("suggested_responses") or []):
         text = (r.get("text") or "").strip()
         if not text:
             continue
-        block = _voice_warning_block(text, mode="comment")
+        block = _voice_warning_block(text, mode="comment", no_links=no_links)
         if block:
             warnings.append({
                 "variant_index": i,
@@ -842,14 +858,14 @@ def _check_response_voice(guide: dict) -> list[dict]:
     return warnings
 
 
-def _voice_warning_block(text: str, mode: str) -> Optional[dict]:
+def _voice_warning_block(text: str, mode: str, no_links: bool = False) -> Optional[dict]:
     """Return a warning block for a draft, or None if it passes clean.
 
     The block separates hard-gate failures (which make a draft non-returnable
     per voice_tone.md) from softer style warnings (the "words to avoid" list
     and disclosure-length nits). `passes_gate` keys off hard failures only.
     """
-    result = _voice_issues(text, mode=mode)
+    result = _voice_issues(text, mode=mode, no_links=no_links)
     if not (result["hard"] or result["soft"]):
         return None
     return {
@@ -859,7 +875,16 @@ def _voice_warning_block(text: str, mode: str) -> Optional[dict]:
     }
 
 
-def _voice_issues(text: str, mode: str = "comment") -> dict:
+# Matches http(s) URLs, www.-prefixed hosts, and bare common-TLD domains
+# (e.g. "onrampfunds.com") so the no-links check catches a drive-by domain
+# mention even without a scheme or "www.".
+_URL_RE = re.compile(
+    r"(https?://\S+|www\.\S+|\b[a-z0-9][a-z0-9-]*\.(?:com|net|org|io|co)\b)",
+    re.IGNORECASE,
+)
+
+
+def _voice_issues(text: str, mode: str = "comment", no_links: bool = False) -> dict:
     """Return {"hard": [...], "soft": [...]} of voice/tone violations.
 
     mode="comment" (opening comments): the full STOP block plus the 7-item
@@ -869,6 +894,10 @@ def _voice_issues(text: str, mode: str = "comment") -> dict:
         only. The comment-specific structural rules are dropped because a
         300-500 word post legitimately uses headers and light structure; a
         runaway-length guard replaces the 200-word cap.
+    no_links: If True, any URL/domain mention is a hard violation — the
+        Shopify Community no-links-ever operating decision (see
+        shopify_community_engagement_rules.md). Not applied on Reddit,
+        where links are situationally fine per reddit_engagement_rules.
     """
     hard: list[str] = []
     soft: list[str] = []
@@ -899,6 +928,11 @@ def _voice_issues(text: str, mode: str = "comment") -> dict:
     hits = [p for p in _FORBIDDEN_PHRASES if p in lower]
     if hits:
         hard.append(f"AI-tell phrases: {hits}")
+
+    if no_links:
+        link_hits = _URL_RE.findall(text)
+        if link_hits:
+            hard.append(f"contains a link (Shopify Community no-links policy): {link_hits}")
 
     # --- Comment-specific structural rules ---
     if mode == "comment":

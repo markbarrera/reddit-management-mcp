@@ -444,7 +444,9 @@ The target register is the 130-word reference comment in the voice_and_tone grou
         text = text.strip()
         if text.startswith("json"):
             text = text[4:].strip()
-        return json.loads(text)
+        guide = json.loads(text)
+        guide["platform"] = thread.get("platform", "reddit")
+        return guide
     except Exception as e:
         logger.error(f"Participation guide error: {e}")
         return {"error": str(e)}

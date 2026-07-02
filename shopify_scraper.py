@@ -28,6 +28,7 @@ import logging
 import threading
 import httpx
 from concurrent.futures import ThreadPoolExecutor
+from html.parser import HTMLParser
 from typing import Optional
 from datetime import datetime, timezone
 
@@ -50,6 +51,65 @@ DEFAULT_CATEGORIES = {
     "shopify-discussion": 95,
     "start-a-business": 282,
 }
+
+
+class _CookedTextExtractor(HTMLParser):
+    """Extract plain text from Discourse's "cooked" post HTML.
+
+    A naive tag-strip leaves two kinds of junk behind that a plain regex
+    can't distinguish from real content:
+    - Image embeds render as a "lightbox-wrapper" div containing the image,
+      a filename, and a "550x342 21.2 KB" dimensions/size caption. Stripping
+      tags alone turns that caption into stray text inline with the reply.
+    - Quoted replies render as an "aside.quote" block containing a full
+      copy of the post being replied to. Stripping tags alone merges that
+      quoted text indistinguishably into the replier's own words, which
+      can make the classifier attribute someone else's statement to the
+      wrong author.
+
+    Both are dropped by tag/class rather than regexed out, since their
+    boundaries are real HTML elements, not a text pattern.
+    """
+
+    _SKIPPED_CLASSES = {"quote", "lightbox-wrapper"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._skip_tag: Optional[str] = None
+        self._skip_depth = 0
+
+    @staticmethod
+    def _classes(attrs: list[tuple[str, Optional[str]]]) -> set[str]:
+        for name, value in attrs:
+            if name == "class" and value:
+                return set(value.split())
+        return set()
+
+    def handle_starttag(self, tag, attrs):
+        if self._skip_depth > 0:
+            if tag == self._skip_tag:
+                self._skip_depth += 1
+            return
+        if self._classes(attrs) & self._SKIPPED_CLASSES:
+            self._skip_tag = tag
+            self._skip_depth = 1
+            if tag == "div":  # lightbox-wrapper — note an image was here
+                self.parts.append(" [image] ")
+            return
+        if tag in ("p", "br", "li", "blockquote"):
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if self._skip_depth > 0 and tag == self._skip_tag:
+            self._skip_depth -= 1
+
+    def handle_data(self, data):
+        if self._skip_depth == 0:
+            self.parts.append(data)
+
+    def get_text(self) -> str:
+        return "".join(self.parts)
 
 
 class ShopifyCommunityScraper:
@@ -108,10 +168,17 @@ class ShopifyCommunityScraper:
 
     @staticmethod
     def _strip_html(cooked: str) -> str:
-        """Convert Discourse's rendered-HTML post body to plain text."""
+        """Convert Discourse's rendered-HTML post body to plain text.
+
+        Uses _CookedTextExtractor rather than a blind tag-strip so that
+        image captions and quoted-reply text don't bleed into the result
+        as if they were the author's own words (see that class's docstring).
+        """
         if not cooked:
             return ""
-        text = re.sub(r"<[^>]+>", " ", cooked)
+        extractor = _CookedTextExtractor()
+        extractor.feed(cooked)
+        text = extractor.get_text()
         text = html.unescape(text)
         text = re.sub(r"[ \t]+", " ", text)
         text = re.sub(r"\n\s*\n+", "\n\n", text)

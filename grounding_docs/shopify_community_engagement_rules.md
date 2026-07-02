@@ -36,6 +36,29 @@ payout gaps work, what to check in a financing offer) without naming
 Onramp. This mirrors the "no disclosure needed" tier from
 `voice_tone` — share expertise, don't attach a brand to it.
 
+## Operating Decision: No Links, Ever
+
+Confirmed 2026-07-02: Onramp does not need to post links on Shopify
+Community. This is now a hard rule, not a situational judgment call.
+**Never include a URL in a Shopify Community reply** — no
+onrampfunds.com, no onrampfunds.com/compare, nothing. `suggested_links`
+in a participation guide for a Shopify Community thread should always be
+empty.
+
+What this removes:
+- The new-account link-rate-limiting risk (Discourse commonly throttles
+  how many links a low-trust account can post) — moot with zero links.
+- Shopify's "external linking discouraged as a general practice" norm —
+  also moot.
+
+**What this does not remove:** the Ask & Offer board restriction above is
+about naming/describing Onramp as a product or service, not specifically
+about URLs. A link-free reply that still pitches Onramp's pricing and
+features outside Ask & Offer is just as much a guideline violation as one
+with a link. Going link-free simplifies the voice (pure expertise-sharing,
+a spoken disclosure when warranted, never a pitch) — it does not create a
+loophole to describe the product outside the sanctioned venue.
+
 ## Hard "Do Nots" (Shopify Community-Specific)
 
 1. **Do not post contact details or ask someone to DM you, in a reply.**
@@ -46,11 +69,11 @@ Onramp. This mirrors the "no disclosure needed" tier from
 2. **Do not post templated or copy-pasted replies across multiple topics.**
    Shopify's guidelines call this out by name as forbidden. Every reply
    must be written for the specific thread.
-3. **Do not drop a link as the whole answer.** Same principle as Reddit's
-   link-spam rule (`reddit_engagement_rules`), but Shopify's own guidelines
-   independently discourage third-party links in answers "as a general
-   practice." A link may supplement an answer that already stands on its
-   own; it cannot replace one.
+3. **Do not post links at all.** See "Operating Decision: No Links, Ever"
+   above — this supersedes the usual "a link may supplement an answer
+   that stands on its own" guidance from `reddit_engagement_rules`. On
+   Shopify Community specifically, the answer must always stand on its
+   own with zero links.
 4. **Do not sock-puppet, astroturf, or fake being a customer.** Same rules
    as Reddit (`reddit_engagement_rules`) apply here without modification.
 5. **Do not attack competitors directly.** Same as Reddit — describe
@@ -111,10 +134,12 @@ seller helping in a support forum, not a Reddit thread.
 
 ## Operational Notes
 
-- **New-account posting limits [VERIFY]:** Discourse forums commonly rate-limit
-  or restrict how many links a new/low-trust account can post. Confirm
-  Onramp's community.shopify.com account's trust level before assuming a
-  drafted reply's links will post without being held for review.
+- **New-account link-posting limits: moot.** Discourse forums commonly
+  rate-limit how many links a new/low-trust account can post, but the
+  no-links-ever decision above means this never comes into play. Trust
+  level still matters for other things (how fast a new account can post
+  at all, reply frequency limits) — worth confirming [VERIFY] before
+  high-volume participation, just not for link-related reasons.
 - **Staff replies:** Shopify staff (Social Care Team) frequently answer
   technical questions directly in these boards. Do not compete with or
   contradict an existing staff answer on a technical point; if a staff
