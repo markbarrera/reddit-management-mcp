@@ -1,9 +1,9 @@
-"""Slack daily digest of high-priority Reddit threads.
+"""Slack daily digest of high-priority community threads (Reddit + Shopify Community).
 
 Runs once a day (via Railway cron, GitHub Action, or `python slack_digest.py`).
 
 Pipeline:
-1. Optionally ingest fresh threads (REDDIT_DIGEST_INGEST=1)
+1. Optionally ingest fresh threads (REDDIT_DIGEST_INGEST=1, SHOPIFY_DIGEST_INGEST=1)
 2. Classify any unclassified threads
 3. Find newly-classified urgent/high priority threads from the last N hours
 4. Post a digest to SLACK_WEBHOOK_URL
@@ -12,10 +12,11 @@ Environment variables:
 - SLACK_WEBHOOK_URL  (required) -- the incoming webhook for the target channel
 - DIGEST_LOOKBACK_HOURS  (default 24)
 - DIGEST_MAX_THREADS     (default 8) -- cap to avoid Slack message bloat
-- REDDIT_DIGEST_INGEST   (default 0) -- set to 1 to scrape before classifying
+- REDDIT_DIGEST_INGEST   (default 0) -- set to 1 to scrape Reddit before classifying
+- SHOPIFY_DIGEST_INGEST  (default 0) -- set to 1 to scrape Shopify Community before classifying
 - REDDIT_DIGEST_CLASSIFY (default 1) -- set to 0 to skip classification step
 - ANTHROPIC_API_KEY      (required if classifying)
-- REDDIT_*               (required if ingesting; see reddit_scraper.py)
+- REDDIT_*               (required if ingesting Reddit; see reddit_scraper.py)
 """
 
 import json
@@ -43,7 +44,7 @@ def _recent_priority_threads(lookback_hours: int, limit: int) -> list[dict]:
     cutoff = time.time() - (lookback_hours * 3600)
     conn = get_db()
     rows = conn.execute("""
-        SELECT thread_id, subreddit, title, url, score, num_comments,
+        SELECT thread_id, platform, subreddit, title, url, score, num_comments,
                classification, participation_priority, created_utc
         FROM reddit_threads
         WHERE classification IS NOT NULL
@@ -60,6 +61,13 @@ def _recent_priority_threads(lookback_hours: int, limit: int) -> list[dict]:
     """, (cutoff, limit)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def _community_label(thread: dict) -> str:
+    """Human-readable community identifier, platform-aware."""
+    if thread.get("platform") == "shopify_community":
+        return f"Shopify Community: {thread['subreddit']}"
+    return f"r/{thread['subreddit']}"
 
 
 def _format_thread_block(thread: dict) -> dict:
@@ -82,7 +90,7 @@ def _format_thread_block(thread: dict) -> dict:
         title = title[:137] + "..."
 
     text = (
-        f"{emoji} *{priority.upper()}*  |  r/{thread['subreddit']}  |  "
+        f"{emoji} *{priority.upper()}*  |  {_community_label(thread)}  |  "
         f"{thread['score']} upvotes  |  {thread['num_comments']} comments\n"
         f"*<{thread['url']}|{title}>*\n"
         f">_{reasoning}_\n"
@@ -99,7 +107,7 @@ def build_digest_blocks(threads: list[dict], lookback_hours: int) -> list[dict]:
             "text": {
                 "type": "mrkdwn",
                 "text": (
-                    f":mag: *Reddit Intelligence Digest*\n"
+                    f":mag: *Community Intelligence Digest*\n"
                     f"No new urgent or high-priority threads in the last "
                     f"{lookback_hours} hours. The MCP is still scanning."
                 ),
@@ -114,7 +122,7 @@ def build_digest_blocks(threads: list[dict], lookback_hours: int) -> list[dict]:
             "type": "header",
             "text": {
                 "type": "plain_text",
-                "text": f"Reddit Intelligence Digest -- {len(threads)} threads to review",
+                "text": f"Community Intelligence Digest -- {len(threads)} threads to review",
             },
         },
         {
@@ -150,7 +158,7 @@ def build_digest_blocks(threads: list[dict], lookback_hours: int) -> list[dict]:
 
 def post_to_slack(webhook_url: str, blocks: list[dict]) -> None:
     """POST the digest payload to the Slack webhook."""
-    fallback = "Reddit Intelligence Digest is ready."
+    fallback = "Community Intelligence Digest is ready."
     payload = {"text": fallback, "blocks": blocks}
     resp = httpx.post(webhook_url, json=payload, timeout=30.0)
     resp.raise_for_status()
@@ -174,7 +182,20 @@ def main() -> None:
             threads, _ = scraper.scrape_full(limit_per_source=15, fetch_comments=False)
             new = sum(1 for t in threads if upsert_thread(t))
             complete_scrape_run(run_id, len(threads), new)
-            logger.info(f"Ingested {len(threads)} threads ({new} new)")
+            logger.info(f"Ingested {len(threads)} Reddit threads ({new} new)")
+        finally:
+            scraper.close()
+
+    if os.environ.get("SHOPIFY_DIGEST_INGEST", "0") == "1":
+        from shopify_scraper import ShopifyCommunityScraper
+        from db import upsert_thread, start_scrape_run, complete_scrape_run
+        scraper = ShopifyCommunityScraper()
+        run_id = start_scrape_run([], [], platform="shopify_community")
+        try:
+            threads, _ = scraper.scrape_full(limit_per_source=15, fetch_details=False)
+            new = sum(1 for t in threads if upsert_thread(t))
+            complete_scrape_run(run_id, len(threads), new)
+            logger.info(f"Ingested {len(threads)} Shopify Community threads ({new} new)")
         finally:
             scraper.close()
 

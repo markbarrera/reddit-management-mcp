@@ -32,6 +32,12 @@ DOCS = [
         "file": "reddit_engagement_rules.md",
     },
     {
+        "doc_key": "shopify_community_engagement_rules",
+        "title": "Shopify Community Engagement Rules: Onramp Funds",
+        "doc_type": "reference",
+        "file": "shopify_community_engagement_rules.md",
+    },
+    {
         "doc_key": "product_messaging",
         "title": "Product Messaging: Onramp Funds",
         "doc_type": "product",

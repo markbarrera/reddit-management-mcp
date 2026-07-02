@@ -1,4 +1,8 @@
-"""Grounding-aware Reddit thread classifier using Claude API."""
+"""Grounding-aware community thread classifier using Claude API.
+
+Platform-aware for Reddit and Shopify Community threads (thread["platform"]).
+Thread origination (generate_thread_suggestions) stays Reddit-only.
+"""
 
 import json
 import logging
@@ -16,6 +20,27 @@ logger = logging.getLogger(__name__)
 
 CLASSIFIER_MODEL = os.environ.get("CLASSIFIER_MODEL", "claude-sonnet-4-5-20250929")
 CLASSIFIER_CONCURRENCY = int(os.environ.get("CLASSIFIER_CONCURRENCY", "8"))
+
+
+def _community_label(thread: dict) -> str:
+    """Human-readable community identifier for a thread, platform-aware."""
+    platform = thread.get("platform", "reddit")
+    sub = thread.get("subreddit", "unknown")
+    if platform == "shopify_community":
+        return f"Shopify Community board: {sub}"
+    return f"Subreddit: r/{sub}"
+
+
+def _platform_noun(thread: dict) -> str:
+    """Short platform name for prompt text ("Reddit" vs "Shopify Community")."""
+    return "Shopify Community" if thread.get("platform") == "shopify_community" else "Reddit"
+
+
+def _engagement_rules_doc_key(thread: dict) -> str:
+    """Which engagement-rules grounding doc applies to this thread's platform."""
+    if thread.get("platform") == "shopify_community":
+        return "shopify_community_engagement_rules"
+    return "reddit_engagement_rules"
 
 
 def _format_top_comments(comments_json: str, limit: int = 10) -> str:
@@ -62,7 +87,7 @@ def classify_thread_data(thread: dict) -> dict:
     # Split into a cacheable grounding-docs prefix and a per-thread suffix.
     # Anthropic prompt caching saves ~90% of input processing time on
     # subsequent calls within the 5-min cache window.
-    grounding_block = f"""You are classifying a Reddit thread for Onramp Funds, a revenue-based financing company for ecommerce sellers (Amazon FBA, Shopify, multi-channel).
+    grounding_block = f"""You are classifying a {_platform_noun(thread)} thread for Onramp Funds, a revenue-based financing company for ecommerce sellers (Amazon FBA, Shopify, multi-channel).
 
 Use the following strategic context to inform your classification:
 
@@ -81,7 +106,7 @@ Use the following strategic context to inform your classification:
     thread_block = f"""Classify this thread:
 
 <thread>
-Subreddit: r/{thread.get('subreddit', 'unknown')}
+{_community_label(thread)}
 Title: {thread.get('title', '')}
 Body: {thread.get('body', '')}
 Score: {thread.get('score', 0)} | Comments: {thread.get('num_comments', 0)} | Upvote ratio: {thread.get('upvote_ratio', 0)}
@@ -163,7 +188,11 @@ Return ONLY valid JSON (no markdown fences, no explanation) with this exact stru
         return {"error": str(e), "participation_priority": "unscored"}
 
 
-def classify_batch(batch_size: int = 10, thread_ids: Optional[list[str]] = None) -> dict:
+def classify_batch(
+    batch_size: int = 10,
+    thread_ids: Optional[list[str]] = None,
+    platform: Optional[str] = None,
+) -> dict:
     """Classify a batch of threads concurrently.
 
     Anthropic calls run in parallel (CLASSIFIER_CONCURRENCY workers) so a
@@ -174,6 +203,8 @@ def classify_batch(batch_size: int = 10, thread_ids: Optional[list[str]] = None)
     Args:
         batch_size: Number of unclassified threads to process
         thread_ids: Specific thread IDs to classify (overrides batch_size)
+        platform: Restrict the batch to this platform ("reddit",
+            "shopify_community"). Ignored if thread_ids is given.
 
     Returns:
         Summary dict with counts and any errors
@@ -182,7 +213,7 @@ def classify_batch(batch_size: int = 10, thread_ids: Optional[list[str]] = None)
         threads = [get_thread(tid) for tid in thread_ids]
         threads = [t for t in threads if t is not None]
     else:
-        threads = get_unclassified_threads(batch_size)
+        threads = get_unclassified_threads(batch_size, platform=platform)
 
     if not threads:
         return {"classified": 0, "message": "No unclassified threads found"}
@@ -227,8 +258,9 @@ def classify_batch(batch_size: int = 10, thread_ids: Optional[list[str]] = None)
 def generate_participation_guide(thread_id: str) -> dict:
     """Generate a full participation recommendation for a thread.
 
-    Loads ALL grounding docs and generates:
-    - Draft response in Reddit voice
+    Loads all grounding docs (picking the platform-correct engagement-rules
+    doc for the thread's platform) and generates:
+    - Draft response in authentic voice for that platform
     - Narrative check
     - Competitor guidance
     - Link suggestions
@@ -238,10 +270,13 @@ def generate_participation_guide(thread_id: str) -> dict:
     if not thread:
         return {"error": f"Thread {thread_id} not found"}
 
-    # Load all grounding docs
+    # Load all grounding docs. Engagement rules are platform-specific:
+    # Shopify Community has materially different, platform-enforced
+    # self-promotion and disclosure rules (see shopify_community_engagement_rules.md)
+    # that don't transfer from Reddit's community norms.
     competitive = get_grounding_doc("competitive_positioning") or ""
     voice_tone = get_grounding_doc("voice_tone") or ""
-    engagement_rules = get_grounding_doc("reddit_engagement_rules") or ""
+    engagement_rules = get_grounding_doc(_engagement_rules_doc_key(thread)) or ""
     product = get_grounding_doc("product_messaging") or ""
     icp = get_grounding_doc("icp_personas") or ""
     geo = get_grounding_doc("geo_content_strategy") or ""
@@ -249,10 +284,14 @@ def generate_participation_guide(thread_id: str) -> dict:
     classification_text = thread.get("classification", "Not yet classified")
     comments_text = _format_top_comments(thread.get("comments_json", "[]"), limit=15)
 
-    # Pull aggregated subreddit profile from our DB so the guide is
+    # Pull aggregated community profile from our DB so the guide is
     # calibrated to the community we're posting in, not just the brand
-    # docs. DB-only (no live Reddit calls here) to keep the guide fast.
-    subreddit_profile = get_subreddit_profile_data(thread.get("subreddit") or "")
+    # docs. DB-only (no live network calls here) to keep the guide fast.
+    # Scoped to this thread's platform so a same-named board/subreddit on
+    # a different platform can't bleed into the profile.
+    subreddit_profile = get_subreddit_profile_data(
+        thread.get("subreddit") or "", platform=thread.get("platform", "reddit")
+    )
     subreddit_profile_json = json.dumps(
         subreddit_profile, indent=2, default=str
     )[:4000]
@@ -260,7 +299,7 @@ def generate_participation_guide(thread_id: str) -> dict:
     # Split into a cacheable grounding-docs block (all 6 brand docs, ~60KB)
     # and a per-thread block. With prompt caching, the 60KB only gets
     # processed once per 5-min window across all calls.
-    grounding_block = f"""You are an expert Reddit strategist for Onramp Funds, a revenue-based financing platform for ecommerce sellers.
+    grounding_block = f"""You are an expert {_platform_noun(thread)} strategist for Onramp Funds, a revenue-based financing platform for ecommerce sellers.
 
 <competitive_positioning>
 {competitive}
@@ -293,7 +332,7 @@ Do not return a draft that fails any checklist item. Rewrite it until it passes.
 Each suggested_response.text field must be 200 words or fewer.
 Count the words before returning. If over 200, cut the weakest point and recount.
 
-Generate a detailed participation guide for this Reddit thread.
+Generate a detailed participation guide for this {_platform_noun(thread)} thread.
 
 PROCEDURE FOR EACH DRAFT IN suggested_responses:
 1. Before writing the draft, re-read the STOP block at the top of the voice_and_tone document. Those are not guidelines. They are a hard gate.
@@ -303,7 +342,7 @@ PROCEDURE FOR EACH DRAFT IN suggested_responses:
 5. If a draft cannot pass all 7 gate items without major rewriting, the underlying response variant is wrong. Change the variant and try again.
 
 <thread>
-Subreddit: r/{thread.get('subreddit')}
+{_community_label(thread)}
 Title: {thread.get('title')}
 Body: {thread.get('body')}
 Score: {thread.get('score')} | Comments: {thread.get('num_comments')}
@@ -312,10 +351,10 @@ Classification: {classification_text}
 </thread>
 
 <subreddit_profile>
-Aggregated profile of r/{thread.get('subreddit')} from our scraping history.
+Aggregated profile of {thread.get('subreddit')} from our scraping history.
 Use this to calibrate tone, register, and word choice to what this specific
 community responds to. Pay attention to which competitors get mentioned and
-the sentiment around them, the typical persona of the OP in this sub, and
+the sentiment around them, the typical persona of the OP in this community, and
 the topic mix.
 
 {subreddit_profile_json}
@@ -334,7 +373,7 @@ Return ONLY valid JSON with this structure:
   "suggested_responses": [
     {{
       "variant": "peer_mode|expert_mode|helper_mode|corrective_mode",
-      "text": "The full draft response text, written in authentic Reddit voice",
+      "text": "The full draft response text, written in authentic voice for this platform",
       "tone_notes": "Brief note on tone calibration"
     }}
   ],
@@ -405,7 +444,9 @@ The target register is the 130-word reference comment in the voice_and_tone grou
         text = text.strip()
         if text.startswith("json"):
             text = text[4:].strip()
-        return json.loads(text)
+        guide = json.loads(text)
+        guide["platform"] = thread.get("platform", "reddit")
+        return guide
     except Exception as e:
         logger.error(f"Participation guide error: {e}")
         return {"error": str(e)}
@@ -416,7 +457,13 @@ def generate_thread_suggestions(
     persona: Optional[str] = None,
     limit: int = 5,
 ) -> list[dict]:
-    """Generate thread origination suggestions."""
+    """Generate Reddit thread origination suggestions.
+
+    Reddit-only by design. Shopify Community's self-promotion policy
+    restricts anything solution-shaped to the Ask & Offer board (see
+    shopify_community_engagement_rules.md), so unprompted "content marketing"
+    thread origination doesn't map to that platform the way it does to Reddit.
+    """
     geo = get_grounding_doc("geo_content_strategy") or ""
     competitive = get_grounding_doc("competitive_positioning") or ""
     icp = get_grounding_doc("icp_personas") or ""
