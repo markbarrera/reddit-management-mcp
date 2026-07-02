@@ -68,7 +68,6 @@ def init_db():
         );
 
         CREATE INDEX IF NOT EXISTS idx_reddit_thread_id ON reddit_threads(thread_id);
-        CREATE INDEX IF NOT EXISTS idx_reddit_platform ON reddit_threads(platform);
         CREATE INDEX IF NOT EXISTS idx_reddit_subreddit ON reddit_threads(subreddit);
         CREATE INDEX IF NOT EXISTS idx_reddit_score ON reddit_threads(score DESC);
         CREATE INDEX IF NOT EXISTS idx_reddit_created ON reddit_threads(created_utc DESC);
@@ -114,6 +113,14 @@ def init_db():
             conn.commit()
         except sqlite3.OperationalError:
             pass  # Column already exists
+
+    # This index must be created after the migration above, not in the
+    # initial executescript: on a database that predates the platform
+    # column, reddit_threads already exists (CREATE TABLE IF NOT EXISTS is
+    # a no-op) and doesn't have the column yet, so indexing it any earlier
+    # fails with "no such column: platform".
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_reddit_platform ON reddit_threads(platform)")
+    conn.commit()
 
     conn.close()
     logger.info(f"Database initialized at {DB_PATH}")
