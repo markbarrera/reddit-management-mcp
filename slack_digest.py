@@ -15,6 +15,10 @@ Environment variables:
 - REDDIT_DIGEST_INGEST   (default 0) -- set to 1 to scrape Reddit before classifying
 - SHOPIFY_DIGEST_INGEST  (default 0) -- set to 1 to scrape Shopify Community before classifying
 - REDDIT_DIGEST_CLASSIFY (default 1) -- set to 0 to skip classification step
+- DIGEST_CLASSIFY_BATCH_SIZE (default 25) -- total threads classified per run,
+  split evenly between Reddit and Shopify Community so neither platform's
+  backlog starves the other out (Reddit's upvote-scale scores would
+  otherwise dominate a single mixed-platform batch)
 - ANTHROPIC_API_KEY      (required if classifying)
 - REDDIT_*               (required if ingesting Reddit; see reddit_scraper.py)
 """
@@ -200,8 +204,22 @@ def main() -> None:
             scraper.close()
 
     if os.environ.get("REDDIT_DIGEST_CLASSIFY", "1") == "1":
-        result = classify_batch(batch_size=25)
-        logger.info(f"Classified {result.get('classified', 0)} threads")
+        # Classify each platform's backlog separately, each with its own
+        # slice of the batch budget. A single classify_batch(batch_size=N)
+        # call with no platform filter orders candidates by score DESC
+        # across both platforms — Reddit's upvote-scale scores are
+        # typically much larger than Shopify Community's like_count, so
+        # Reddit fills the whole batch first whenever there's any Reddit
+        # backlog, and newly-ingested Shopify threads never get classified
+        # (silently defeating SHOPIFY_DIGEST_INGEST).
+        total_batch = int(os.environ.get("DIGEST_CLASSIFY_BATCH_SIZE", "25"))
+        shopify_share = total_batch // 2
+        for platform, size in (
+            ("reddit", total_batch - shopify_share),
+            ("shopify_community", shopify_share),
+        ):
+            result = classify_batch(batch_size=size, platform=platform)
+            logger.info(f"Classified {result.get('classified', 0)} {platform} threads")
 
     threads = _recent_priority_threads(lookback, max_threads)
     blocks = build_digest_blocks(threads, lookback)

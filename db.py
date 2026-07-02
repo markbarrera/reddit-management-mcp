@@ -608,25 +608,30 @@ def get_stats(subreddit: Optional[str] = None, platform: Optional[str] = None) -
         params
     ).fetchone()[0]
 
-    by_subreddit = conn.execute("""
+    # These breakdowns must respect the same subreddit/platform filter as
+    # total/classified above — otherwise a scoped call (e.g.
+    # reddit_stats(platform="reddit")) returns correct top-level counts but
+    # breakdowns that still mix in the other platform's data, which is
+    # internally inconsistent and contradicts this function's own docstring.
+    by_subreddit = conn.execute(f"""
         SELECT platform, subreddit, COUNT(*) as count, AVG(score) as avg_score
-        FROM reddit_threads GROUP BY platform, subreddit ORDER BY count DESC
-    """).fetchall()
+        FROM reddit_threads {where} GROUP BY platform, subreddit ORDER BY count DESC
+    """, params).fetchall()
 
-    by_platform = conn.execute("""
+    by_platform = conn.execute(f"""
         SELECT platform, COUNT(*) as count
-        FROM reddit_threads GROUP BY platform ORDER BY count DESC
-    """).fetchall()
+        FROM reddit_threads {where} GROUP BY platform ORDER BY count DESC
+    """, params).fetchall()
 
-    by_priority = conn.execute("""
+    by_priority = conn.execute(f"""
         SELECT participation_priority, COUNT(*) as count
-        FROM reddit_threads GROUP BY participation_priority ORDER BY count DESC
-    """).fetchall()
+        FROM reddit_threads {where} GROUP BY participation_priority ORDER BY count DESC
+    """, params).fetchall()
 
-    by_status = conn.execute("""
+    by_status = conn.execute(f"""
         SELECT participation_status, COUNT(*) as count
-        FROM reddit_threads GROUP BY participation_status ORDER BY count DESC
-    """).fetchall()
+        FROM reddit_threads {where} GROUP BY participation_status ORDER BY count DESC
+    """, params).fetchall()
 
     conn.close()
     return {

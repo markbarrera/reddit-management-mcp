@@ -252,13 +252,24 @@ class ShopifyCommunityScraper:
         if not posts:
             return None
         op = posts[0]
+        # Discourse's reply_to_post_number is a per-topic sequential position
+        # (1, 2, 3...), a different namespace from the persistent "id" field
+        # comments are keyed by. Resolve it through a post_number -> id map
+        # so parent_id actually matches another entry's "id" (or the OP's,
+        # if a reply targets post_number 1 — the OP isn't itself in
+        # `comments`, mirroring how a Reddit comment's parent_id can point
+        # at the top-level post rather than another comment).
+        post_number_to_id = {
+            p.get("post_number"): str(p.get("id", ""))
+            for p in posts if p.get("post_number") is not None
+        }
         comments = [
             {
                 "id": str(p.get("id", "")),
                 "author": p.get("username", "[deleted]"),
                 "body": self._strip_html(p.get("cooked", "")),
                 "score": p.get("score", 0) or 0,
-                "parent_id": str(p.get("reply_to_post_number") or ""),
+                "parent_id": post_number_to_id.get(p.get("reply_to_post_number"), ""),
                 "depth": 0,  # Discourse posts are a flat sequence, not a nested tree
                 "created_utc": self._parse_iso(p.get("created_at")),
             }

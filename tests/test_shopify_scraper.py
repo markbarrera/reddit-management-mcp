@@ -201,14 +201,47 @@ class TestFetchTopic:
             "title": "T", "category_id": 217, "like_count": 2, "reply_count": 1,
             "created_at": "2024-01-01T00:00:00.000Z",
             "post_stream": {"posts": [
-                {"username": "op", "cooked": "<p>op text</p>", "created_at": "2024-01-01T00:00:00.000Z"},
-                {"username": "r1", "cooked": "<p>reply text</p>", "score": 5.0, "reply_to_post_number": 1, "created_at": "2024-01-02T00:00:00.000Z"},
+                {"id": 900, "post_number": 1, "username": "op", "cooked": "<p>op text</p>", "created_at": "2024-01-01T00:00:00.000Z"},
+                {"id": 901, "post_number": 2, "username": "r1", "cooked": "<p>reply text</p>", "score": 5.0, "reply_to_post_number": 1, "created_at": "2024-01-02T00:00:00.000Z"},
             ]},
         })
         thread = scraper.fetch_topic("payments-shipping-fulfilment", "t-slug", 42)
         assert thread["thread_id"] == "sc_42"
         assert thread["body"] == "op text"
-        assert thread["comments"][0]["parent_id"] == "1"
+        assert thread["comments"][0]["id"] == "901"
+        # parent_id must resolve to the OP's persistent id (900), not the
+        # raw reply_to_post_number (1) — id and reply_to_post_number are
+        # different Discourse ID namespaces (see _thread_from_topic_json).
+        assert thread["comments"][0]["parent_id"] == "900"
+
+    def test_parent_id_resolves_reply_to_another_comment_not_just_op(self, mocker):
+        scraper = ShopifyCommunityScraper()
+        mocker.patch.object(scraper, "_request", return_value={
+            "title": "T", "category_id": 217, "like_count": 0, "reply_count": 2,
+            "created_at": "2024-01-01T00:00:00.000Z",
+            "post_stream": {"posts": [
+                {"id": 100, "post_number": 1, "username": "op", "cooked": "<p>op</p>", "created_at": "2024-01-01T00:00:00.000Z"},
+                {"id": 101, "post_number": 2, "username": "first_reply", "cooked": "<p>first</p>", "created_at": "2024-01-01T00:00:00.000Z"},
+                {"id": 102, "post_number": 3, "username": "second_reply", "cooked": "<p>second</p>", "reply_to_post_number": 2, "created_at": "2024-01-01T00:00:00.000Z"},
+            ]},
+        })
+        thread = scraper.fetch_topic("shopify-discussion", "t-slug", 1)
+        by_author = {c["author"]: c for c in thread["comments"]}
+        # second_reply targets post_number 2, which belongs to first_reply's id (101).
+        assert by_author["second_reply"]["parent_id"] == "101"
+
+    def test_missing_reply_to_post_number_yields_empty_parent_id(self, mocker):
+        scraper = ShopifyCommunityScraper()
+        mocker.patch.object(scraper, "_request", return_value={
+            "title": "T", "category_id": 217, "like_count": 0, "reply_count": 1,
+            "created_at": "2024-01-01T00:00:00.000Z",
+            "post_stream": {"posts": [
+                {"id": 1, "post_number": 1, "username": "op", "cooked": "<p>op</p>", "created_at": "2024-01-01T00:00:00.000Z"},
+                {"id": 2, "post_number": 2, "username": "r", "cooked": "<p>r</p>", "created_at": "2024-01-01T00:00:00.000Z"},
+            ]},
+        })
+        thread = scraper.fetch_topic("shopify-discussion", "t-slug", 1)
+        assert thread["comments"][0]["parent_id"] == ""
 
     def test_missing_topic_returns_none(self, mocker):
         scraper = ShopifyCommunityScraper()

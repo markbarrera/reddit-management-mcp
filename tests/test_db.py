@@ -183,6 +183,23 @@ class TestPlatformScopedQueries:
         stats = tmp_db.get_stats(platform="reddit")
         assert stats["total_threads"] == 1
 
+    def test_get_stats_platform_filter_scopes_all_breakdowns(self, tmp_db):
+        # Regression test: total_threads/classified used to respect the
+        # platform filter while by_subreddit/by_platform/by_priority/
+        # by_status silently ignored it and always aggregated across both
+        # platforms — an internally inconsistent response.
+        _seed_reddit_thread(tmp_db, thread_id="r1", subreddit="AmazonSeller")
+        _seed_shopify_thread(tmp_db, thread_id="sc_1", subreddit="accounting-taxes")
+        tmp_db.update_classification("sc_1", {"participation_priority": "high"})
+
+        stats = tmp_db.get_stats(platform="reddit")
+
+        assert {row["platform"] for row in stats["by_platform"]} == {"reddit"}
+        assert {row["platform"] for row in stats["by_subreddit"]} == {"reddit"}
+        # The Shopify thread's 'high' priority must not appear when scoped to reddit.
+        priorities = {row["participation_priority"] for row in stats["by_priority"]}
+        assert "high" not in priorities
+
     def test_get_unclassified_threads_platform_filter(self, tmp_db):
         _seed_reddit_thread(tmp_db, thread_id="r1")
         _seed_shopify_thread(tmp_db, thread_id="sc_1")
