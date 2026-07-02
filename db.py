@@ -163,6 +163,12 @@ def upsert_thread(thread: dict) -> bool:
         peec_update += ", peec_competitors = excluded.peec_competitors"
 
     try:
+        # last_insert_rowid() only advances on a genuine INSERT — the
+        # ON CONFLICT DO UPDATE branch below leaves it unchanged. changes()
+        # is NOT usable to tell new vs. updated apart here: it returns 1 for
+        # both the insert and the conflict-triggered update, since either
+        # way exactly one row was touched by the statement.
+        rowid_before = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         conn.execute(f"""
             INSERT INTO reddit_threads
                 (thread_id, platform, subreddit, title, body, author, url, permalink,
@@ -189,9 +195,8 @@ def upsert_thread(thread: dict) -> bool:
             comments_json, full_text, word_count,
             citation_count or 0, ai_mentioned or "unknown", peec_competitors,
         ))
-        is_new = conn.execute(
-            "SELECT changes()"
-        ).fetchone()[0] > 0
+        rowid_after = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        is_new = rowid_after != rowid_before
         conn.commit()
         return is_new
     except Exception as e:
@@ -603,25 +608,30 @@ def get_stats(subreddit: Optional[str] = None, platform: Optional[str] = None) -
         params
     ).fetchone()[0]
 
-    by_subreddit = conn.execute("""
+    # These breakdowns must respect the same subreddit/platform filter as
+    # total/classified above — otherwise a scoped call (e.g.
+    # reddit_stats(platform="reddit")) returns correct top-level counts but
+    # breakdowns that still mix in the other platform's data, which is
+    # internally inconsistent and contradicts this function's own docstring.
+    by_subreddit = conn.execute(f"""
         SELECT platform, subreddit, COUNT(*) as count, AVG(score) as avg_score
-        FROM reddit_threads GROUP BY platform, subreddit ORDER BY count DESC
-    """).fetchall()
+        FROM reddit_threads {where} GROUP BY platform, subreddit ORDER BY count DESC
+    """, params).fetchall()
 
-    by_platform = conn.execute("""
+    by_platform = conn.execute(f"""
         SELECT platform, COUNT(*) as count
-        FROM reddit_threads GROUP BY platform ORDER BY count DESC
-    """).fetchall()
+        FROM reddit_threads {where} GROUP BY platform ORDER BY count DESC
+    """, params).fetchall()
 
-    by_priority = conn.execute("""
+    by_priority = conn.execute(f"""
         SELECT participation_priority, COUNT(*) as count
-        FROM reddit_threads GROUP BY participation_priority ORDER BY count DESC
-    """).fetchall()
+        FROM reddit_threads {where} GROUP BY participation_priority ORDER BY count DESC
+    """, params).fetchall()
 
-    by_status = conn.execute("""
+    by_status = conn.execute(f"""
         SELECT participation_status, COUNT(*) as count
-        FROM reddit_threads GROUP BY participation_status ORDER BY count DESC
-    """).fetchall()
+        FROM reddit_threads {where} GROUP BY participation_status ORDER BY count DESC
+    """, params).fetchall()
 
     conn.close()
     return {

@@ -14,6 +14,19 @@ python seed_grounding_docs.py    # one-time: load brand grounding docs into the 
 python server_remote.py
 ```
 
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest tests/ -v
+```
+
+Runs on every push/PR via GitHub Actions (`.github/workflows/tests.yml`).
+No live network calls or API keys required — Shopify/Reddit HTTP calls and
+Anthropic calls are mocked. Covers the platform-aware DB layer (including a
+regression test for a real migration crash found in manual testing), the
+Discourse HTML-to-text extraction, and the voice/tone + no-links gate.
+
 ## Environment Variables
 
 - `ANTHROPIC_API_KEY` — Required for classification
