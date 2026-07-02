@@ -31,6 +31,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS reddit_threads (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             thread_id TEXT UNIQUE NOT NULL,
+            platform TEXT NOT NULL DEFAULT 'reddit',
             subreddit TEXT NOT NULL,
             title TEXT NOT NULL,
             body TEXT DEFAULT '',
@@ -67,6 +68,7 @@ def init_db():
         );
 
         CREATE INDEX IF NOT EXISTS idx_reddit_thread_id ON reddit_threads(thread_id);
+        CREATE INDEX IF NOT EXISTS idx_reddit_platform ON reddit_threads(platform);
         CREATE INDEX IF NOT EXISTS idx_reddit_subreddit ON reddit_threads(subreddit);
         CREATE INDEX IF NOT EXISTS idx_reddit_score ON reddit_threads(score DESC);
         CREATE INDEX IF NOT EXISTS idx_reddit_created ON reddit_threads(created_utc DESC);
@@ -87,6 +89,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             completed_at TIMESTAMP,
+            platform TEXT NOT NULL DEFAULT 'reddit',
             subreddits TEXT,
             keywords TEXT,
             threads_found INTEGER DEFAULT 0,
@@ -96,11 +99,15 @@ def init_db():
     """)
     conn.commit()
 
-    # Migrate: add peec.ai columns if they don't exist yet
+    # Migrate: add columns that postdate the original schema, if they
+    # don't exist yet. Existing rows default to 'reddit' so this MCP's
+    # original (Reddit-only) data keeps working unmodified.
     for col_sql in [
         "ALTER TABLE reddit_threads ADD COLUMN citation_count INTEGER DEFAULT 0",
         "ALTER TABLE reddit_threads ADD COLUMN ai_mentioned TEXT DEFAULT 'unknown'",
         "ALTER TABLE reddit_threads ADD COLUMN peec_competitors TEXT",
+        "ALTER TABLE reddit_threads ADD COLUMN platform TEXT NOT NULL DEFAULT 'reddit'",
+        "ALTER TABLE scrape_runs ADD COLUMN platform TEXT NOT NULL DEFAULT 'reddit'",
     ]:
         try:
             conn.execute(col_sql)
@@ -117,7 +124,11 @@ def init_db():
 # ============================================
 
 def upsert_thread(thread: dict) -> bool:
-    """Insert or update a Reddit thread. Returns True if new."""
+    """Insert or update a community thread. Returns True if new.
+
+    thread["platform"] defaults to "reddit" if absent, so existing
+    Reddit-only callers are unaffected.
+    """
     conn = get_db()
 
     # Build full_text from title + body + comments
@@ -147,11 +158,11 @@ def upsert_thread(thread: dict) -> bool:
     try:
         conn.execute(f"""
             INSERT INTO reddit_threads
-                (thread_id, subreddit, title, body, author, url, permalink,
+                (thread_id, platform, subreddit, title, body, author, url, permalink,
                  score, upvote_ratio, num_comments, created_utc,
                  comments_json, full_text, word_count,
                  citation_count, ai_mentioned, peec_competitors)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(thread_id) DO UPDATE SET
                 score = excluded.score,
                 upvote_ratio = excluded.upvote_ratio,
@@ -162,7 +173,8 @@ def upsert_thread(thread: dict) -> bool:
                 scraped_at = CURRENT_TIMESTAMP
                 {peec_update}
         """, (
-            thread["thread_id"], thread["subreddit"], thread["title"],
+            thread["thread_id"], thread.get("platform", "reddit"),
+            thread["subreddit"], thread["title"],
             thread.get("body", ""), thread.get("author", "[deleted]"),
             thread.get("url", ""), thread.get("permalink", ""),
             thread.get("score", 0), thread.get("upvote_ratio", 0.0),
@@ -195,15 +207,28 @@ def get_thread(thread_id: str) -> Optional[dict]:
     return None
 
 
-def get_unclassified_threads(batch_size: int = 10) -> list[dict]:
-    """Get threads that haven't been classified yet."""
+def get_unclassified_threads(batch_size: int = 10, platform: Optional[str] = None) -> list[dict]:
+    """Get threads that haven't been classified yet.
+
+    platform: Restrict to this platform ("reddit", "shopify_community").
+        Omit to pull from all platforms (note: score scales differ between
+        platforms, so ORDER BY score mixes them by raw magnitude).
+    """
     conn = get_db()
-    rows = conn.execute("""
-        SELECT * FROM reddit_threads
-        WHERE classification IS NULL
-        ORDER BY score DESC, num_comments DESC
-        LIMIT ?
-    """, (batch_size,)).fetchall()
+    if platform:
+        rows = conn.execute("""
+            SELECT * FROM reddit_threads
+            WHERE classification IS NULL AND platform = ?
+            ORDER BY score DESC, num_comments DESC
+            LIMIT ?
+        """, (platform, batch_size)).fetchall()
+    else:
+        rows = conn.execute("""
+            SELECT * FROM reddit_threads
+            WHERE classification IS NULL
+            ORDER BY score DESC, num_comments DESC
+            LIMIT ?
+        """, (batch_size,)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
@@ -236,6 +261,7 @@ def update_classification(thread_id: str, classification: dict):
 def search_threads(
     query: Optional[str] = None,
     subreddit: Optional[str] = None,
+    platform: Optional[str] = None,
     min_score: Optional[int] = None,
     participation_priority: Optional[str] = None,
     participation_status: Optional[str] = None,
@@ -244,7 +270,11 @@ def search_threads(
     limit: int = 20,
     offset: int = 0,
 ) -> list[dict]:
-    """Search threads with rich filtering."""
+    """Search threads with rich filtering.
+
+    platform: Filter by source platform ("reddit", "shopify_community").
+        Omit to search across all platforms.
+    """
     conn = get_db()
     conditions = []
     params = []
@@ -255,6 +285,9 @@ def search_threads(
     if subreddit:
         conditions.append("subreddit = ?")
         params.append(subreddit)
+    if platform:
+        conditions.append("platform = ?")
+        params.append(platform)
     if min_score is not None:
         conditions.append("score >= ?")
         params.append(min_score)
@@ -290,6 +323,7 @@ def purge_offtopic_threads(
     keep_subreddits: list[str],
     protect_priorities: Optional[list[str]] = None,
     dry_run: bool = True,
+    platform: Optional[str] = None,
 ) -> dict:
     """Delete threads whose subreddit is not in keep_subreddits.
 
@@ -297,12 +331,15 @@ def purge_offtopic_threads(
     happened to surface threads from unrelated subreddits.
 
     Args:
-        keep_subreddits: Subreddit names to keep (case-insensitive match)
+        keep_subreddits: Subreddit/board names to keep (case-insensitive match)
         protect_priorities: Never delete threads with these participation
             priorities. Defaults to ['urgent', 'high'] so any human-curated
             high-value thread survives even if it's in an off-topic sub.
         dry_run: If True (default), only report what would be deleted.
             Set False to actually delete.
+        platform: Only consider threads from this platform ("reddit",
+            "shopify_community"). Omit to consider all platforms — only
+            safe when keep_subreddits names can't collide across platforms.
 
     Returns:
         Summary dict with counts and a per-subreddit breakdown of what
@@ -315,10 +352,16 @@ def purge_offtopic_threads(
     conn = get_db()
 
     # Find candidates for deletion
-    rows = conn.execute("""
-        SELECT thread_id, subreddit, title, participation_priority
-        FROM reddit_threads
-    """).fetchall()
+    if platform:
+        rows = conn.execute("""
+            SELECT thread_id, subreddit, title, participation_priority
+            FROM reddit_threads WHERE platform = ?
+        """, (platform,)).fetchall()
+    else:
+        rows = conn.execute("""
+            SELECT thread_id, subreddit, title, participation_priority
+            FROM reddit_threads
+        """).fetchall()
 
     to_delete = []
     protected = []
@@ -376,8 +419,8 @@ def purge_offtopic_threads(
     }
 
 
-def get_subreddit_profile_data(subreddit: str) -> dict:
-    """Aggregate DB stats for one subreddit into a profile.
+def get_subreddit_profile_data(subreddit: str, platform: Optional[str] = None) -> dict:
+    """Aggregate DB stats for one subreddit/board into a profile.
 
     Returns thread counts, score stats, topic distribution, persona mix,
     competitor mentions with sentiment, top-scoring threads, and a sample
@@ -385,7 +428,9 @@ def get_subreddit_profile_data(subreddit: str) -> dict:
     doesn't work here" signal).
 
     Args:
-        subreddit: Subreddit name (case-insensitive, "r/" prefix stripped)
+        subreddit: Subreddit/board name (case-insensitive, "r/" prefix stripped)
+        platform: Restrict to this platform ("reddit", "shopify_community").
+            Omit only if you're sure the name can't collide across platforms.
 
     Returns:
         Dict with the profile. If no threads exist in DB for the sub,
@@ -397,8 +442,10 @@ def get_subreddit_profile_data(subreddit: str) -> dict:
                 "message": "Empty subreddit name"}
 
     conn = get_db()
+    plat_clause = " AND platform = ?" if platform else ""
+    plat_params = (platform,) if platform else ()
 
-    row = conn.execute("""
+    row = conn.execute(f"""
         SELECT
             COUNT(*) as total,
             AVG(score) as avg_score,
@@ -406,8 +453,8 @@ def get_subreddit_profile_data(subreddit: str) -> dict:
             MIN(created_utc) as oldest,
             MAX(created_utc) as newest
         FROM reddit_threads
-        WHERE LOWER(subreddit) = ?
-    """, (sub_lower,)).fetchone()
+        WHERE LOWER(subreddit) = ?{plat_clause}
+    """, (sub_lower, *plat_params)).fetchone()
 
     total = row["total"] or 0
     if total == 0:
@@ -425,11 +472,11 @@ def get_subreddit_profile_data(subreddit: str) -> dict:
     competitor_mentions: dict = {}
     classified_count = 0
 
-    rows = conn.execute("""
+    rows = conn.execute(f"""
         SELECT classification
         FROM reddit_threads
-        WHERE LOWER(subreddit) = ? AND classification IS NOT NULL
-    """, (sub_lower,)).fetchall()
+        WHERE LOWER(subreddit) = ?{plat_clause} AND classification IS NOT NULL
+    """, (sub_lower, *plat_params)).fetchall()
 
     for r in rows:
         try:
@@ -454,23 +501,23 @@ def get_subreddit_profile_data(subreddit: str) -> dict:
             entry["count"] += 1
             entry["sentiments"].append(sent)
 
-    top_rows = conn.execute("""
+    top_rows = conn.execute(f"""
         SELECT thread_id, title, score, num_comments,
                participation_priority, url
         FROM reddit_threads
-        WHERE LOWER(subreddit) = ?
+        WHERE LOWER(subreddit) = ?{plat_clause}
         ORDER BY score DESC
         LIMIT 5
-    """, (sub_lower,)).fetchall()
+    """, (sub_lower, *plat_params)).fetchall()
 
-    bottom_rows = conn.execute("""
+    bottom_rows = conn.execute(f"""
         SELECT thread_id, title, score, num_comments,
                participation_priority, url, classification
         FROM reddit_threads
-        WHERE LOWER(subreddit) = ?
+        WHERE LOWER(subreddit) = ?{plat_clause}
         ORDER BY score ASC
         LIMIT 5
-    """, (sub_lower,)).fetchall()
+    """, (sub_lower, *plat_params)).fetchall()
 
     conn.close()
 
@@ -523,11 +570,22 @@ def get_subreddit_profile_data(subreddit: str) -> dict:
     }
 
 
-def get_stats(subreddit: Optional[str] = None) -> dict:
-    """Get aggregate statistics."""
+def get_stats(subreddit: Optional[str] = None, platform: Optional[str] = None) -> dict:
+    """Get aggregate statistics.
+
+    platform: Restrict to this platform ("reddit", "shopify_community").
+        Omit to aggregate across all platforms.
+    """
     conn = get_db()
-    where = "WHERE subreddit = ?" if subreddit else ""
-    params = (subreddit,) if subreddit else ()
+    conditions = []
+    params: list = []
+    if subreddit:
+        conditions.append("subreddit = ?")
+        params.append(subreddit)
+    if platform:
+        conditions.append("platform = ?")
+        params.append(platform)
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
     total = conn.execute(
         f"SELECT COUNT(*) FROM reddit_threads {where}", params
@@ -539,8 +597,13 @@ def get_stats(subreddit: Optional[str] = None) -> dict:
     ).fetchone()[0]
 
     by_subreddit = conn.execute("""
-        SELECT subreddit, COUNT(*) as count, AVG(score) as avg_score
-        FROM reddit_threads GROUP BY subreddit ORDER BY count DESC
+        SELECT platform, subreddit, COUNT(*) as count, AVG(score) as avg_score
+        FROM reddit_threads GROUP BY platform, subreddit ORDER BY count DESC
+    """).fetchall()
+
+    by_platform = conn.execute("""
+        SELECT platform, COUNT(*) as count
+        FROM reddit_threads GROUP BY platform ORDER BY count DESC
     """).fetchall()
 
     by_priority = conn.execute("""
@@ -558,6 +621,7 @@ def get_stats(subreddit: Optional[str] = None) -> dict:
         "total_threads": total,
         "classified": classified,
         "unclassified": total - classified,
+        "by_platform": [dict(r) for r in by_platform],
         "by_subreddit": [dict(r) for r in by_subreddit],
         "by_priority": [dict(r) for r in by_priority],
         "by_status": [dict(r) for r in by_status],
@@ -611,13 +675,13 @@ def list_grounding_docs() -> list[dict]:
 # Scrape Run Tracking
 # ============================================
 
-def start_scrape_run(subreddits: list, keywords: list) -> int:
+def start_scrape_run(subreddits: list, keywords: list, platform: str = "reddit") -> int:
     """Record the start of a scrape run."""
     conn = get_db()
     cursor = conn.execute("""
-        INSERT INTO scrape_runs (subreddits, keywords)
-        VALUES (?, ?)
-    """, (json.dumps(subreddits), json.dumps(keywords)))
+        INSERT INTO scrape_runs (platform, subreddits, keywords)
+        VALUES (?, ?, ?)
+    """, (platform, json.dumps(subreddits), json.dumps(keywords)))
     run_id = cursor.lastrowid
     conn.commit()
     conn.close()

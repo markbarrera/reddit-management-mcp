@@ -19,6 +19,7 @@ from db import (
     purge_offtopic_threads, get_subreddit_profile_data,
 )
 from reddit_scraper import RedditScraper
+from shopify_scraper import ShopifyCommunityScraper, DEFAULT_CATEGORIES as SHOPIFY_DEFAULT_CATEGORIES
 from classifier import (
     classify_batch, generate_participation_guide, generate_thread_suggestions,
 )
@@ -243,6 +244,209 @@ async def reddit_ingest_urls(
     return json.dumps(result, indent=2)
 
 
+# ============================================
+# Shopify Community Tools
+# ============================================
+#
+# Shopify Community (community.shopify.com) is a Discourse forum. Unlike
+# Reddit, keyword search across the whole forum isn't available here:
+# robots.txt disallows /search, so there's no shopify equivalent of
+# reddit_ingest's keyword-search phase. Discovery is category-based
+# (shopify_ingest) or by specific URL (shopify_ingest_urls) — the same
+# pattern reddit_ingest_urls already uses for peec.ai-sourced threads.
+# See shopify_scraper.py's module docstring for the full robots.txt rationale.
+
+@mcp.tool(
+    name="shopify_ingest",
+    annotations={
+        "title": "Scrape Shopify Community Threads",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    }
+)
+async def shopify_ingest(
+    categories: Optional[dict] = None,
+    limit: int = 25,
+    fetch_details: bool = True,
+) -> str:
+    """Scrape Shopify Community (community.shopify.com) threads by category.
+
+    Uses Discourse's public JSON endpoints (no auth needed). No keyword
+    search is available — robots.txt disallows /search on this forum. Use
+    shopify_ingest_urls for keyword-driven discovery (find URLs via Google
+    site-search or Ahrefs, then feed them in directly).
+
+    Args:
+        categories: {category_slug: category_id} to scrape. Defaults to the
+            four boards most relevant to Onramp's ICP personas:
+            payments-shipping-fulfilment (217), accounting-taxes (223),
+            shopify-discussion (95), start-a-business (282).
+        limit: Max topics per category (1-100)
+        fetch_details: Whether to fetch full body + all replies for each
+            topic (slower but richer data; set False for a fast listing-only pass)
+
+    Returns:
+        JSON summary with thread counts, new vs updated, and sample thread titles
+    """
+    categories = categories or SHOPIFY_DEFAULT_CATEGORIES
+    scraper = ShopifyCommunityScraper()
+    run_id = start_scrape_run(list(categories.keys()), [], platform="shopify_community")
+
+    try:
+        threads, scrape_errors = scraper.scrape_full(
+            categories=categories,
+            limit_per_source=limit,
+            fetch_details=fetch_details,
+        )
+
+        new_count = 0
+        updated_count = 0
+        for thread in threads:
+            is_new = upsert_thread(thread)
+            if is_new:
+                new_count += 1
+            else:
+                updated_count += 1
+
+        complete_scrape_run(run_id, len(threads), new_count)
+
+        sample = [
+            {"title": t["title"][:80], "board": t["subreddit"], "score": t["score"]}
+            for t in sorted(threads, key=lambda x: x.get("score", 0), reverse=True)[:10]
+        ]
+
+        result = {
+            "threads_found": len(threads),
+            "new_threads": new_count,
+            "updated_threads": updated_count,
+            "boards_scraped": list(categories.keys()),
+            "top_threads": sample,
+        }
+        if scrape_errors:
+            result["errors"] = scrape_errors
+        return json.dumps(result, indent=2)
+
+    except Exception as e:
+        logger.error(f"Shopify ingest error: {e}")
+        return json.dumps({"error": str(e)})
+    finally:
+        scraper.close()
+
+
+@mcp.tool(
+    name="shopify_ingest_urls",
+    annotations={
+        "title": "Ingest Shopify Community Threads by URL",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    }
+)
+async def shopify_ingest_urls(
+    url_data: list[dict],
+) -> str:
+    """Ingest specific Shopify Community threads by URL, with optional peec.ai citation metadata.
+
+    This is the keyword-discovery workaround for Shopify Community: find
+    relevant threads via Google site-search (site:community.shopify.com) or
+    Ahrefs, then feed the URLs in here. The forum's own search is off-limits
+    (robots.txt disallows /search).
+
+    Each item in url_data must have a 'url' key, and can optionally include:
+      - citation_count: int — how many times AI cited this thread (from peec.ai 'Used total')
+      - ai_mentioned: str — 'Yes', 'No', or 'Unknown' (from peec.ai 'Mentioned')
+      - competitors: str or list — competitor names mentioned (from peec.ai 'Mentions')
+
+    Example url_data:
+      [
+        {"url": "https://community.shopify.com/t/shopify-capital-alternative/588357"},
+        {"url": "https://community.shopify.com/t/how-to-establish-multiple-local-pick-up-locations-for-customers/35206", "citation_count": 12, "ai_mentioned": "No"}
+      ]
+
+    Args:
+        url_data: List of dicts — each requires 'url', optionally 'citation_count',
+            'ai_mentioned', and 'competitors'
+
+    Returns:
+        JSON summary with ingested count, failures, and high-priority gaps found
+    """
+    scraper = ShopifyCommunityScraper()
+    new_count = 0
+    updated_count = 0
+    failed = []
+    high_priority_gaps = []
+
+    try:
+        for item in url_data:
+            url = item.get("url", "")
+            if not url:
+                failed.append({"url": url, "error": "missing url"})
+                continue
+
+            try:
+                thread = scraper.fetch_topic_by_url(url)
+                if not thread:
+                    failed.append({"url": url, "error": "could not fetch or parse"})
+                    continue
+
+                citation_count = item.get("citation_count")
+                ai_mentioned = item.get("ai_mentioned")
+                competitors = item.get("competitors")
+
+                if citation_count is not None:
+                    thread["citation_count"] = int(citation_count)
+                if ai_mentioned is not None:
+                    thread["ai_mentioned"] = str(ai_mentioned)
+                if competitors is not None:
+                    if isinstance(competitors, str):
+                        thread["peec_competitors"] = [
+                            c.strip() for c in competitors.split(",") if c.strip()
+                        ]
+                    else:
+                        thread["peec_competitors"] = competitors
+
+                is_new = upsert_thread(thread)
+                if is_new:
+                    new_count += 1
+                else:
+                    updated_count += 1
+
+                if (
+                    str(ai_mentioned or "").lower() in ("no", "false", "0")
+                    and (citation_count or 0) >= 30
+                ):
+                    high_priority_gaps.append({
+                        "thread_id": thread["thread_id"],
+                        "title": thread["title"][:80],
+                        "board": thread["subreddit"],
+                        "citation_count": citation_count,
+                        "competitors": competitors,
+                    })
+
+            except Exception as e:
+                logger.error(f"Error ingesting {url}: {e}")
+                failed.append({"url": url, "error": str(e)})
+
+    finally:
+        scraper.close()
+
+    result = {
+        "urls_provided": len(url_data),
+        "new_threads": new_count,
+        "updated_threads": updated_count,
+        "failed": len(failed),
+        "high_priority_gaps": sorted(
+            high_priority_gaps, key=lambda x: x["citation_count"], reverse=True
+        ),
+    }
+    if failed:
+        result["failures"] = failed[:20]
+    return json.dumps(result, indent=2)
+
+
 @mcp.tool(
     name="reddit_search",
     annotations={
@@ -256,6 +460,7 @@ async def reddit_ingest_urls(
 async def reddit_search(
     query: Optional[str] = None,
     subreddit: Optional[str] = None,
+    platform: Optional[str] = None,
     min_score: Optional[int] = None,
     participation_priority: Optional[str] = None,
     participation_status: Optional[str] = None,
@@ -263,14 +468,16 @@ async def reddit_search(
     time_range_days: Optional[int] = None,
     limit: int = 20,
 ) -> str:
-    """Search Reddit threads in the database with rich filtering.
+    """Search community threads (Reddit + Shopify Community) in the database with rich filtering.
 
     Combines full-text search with structured classification filters.
 
     Args:
         query: Text search across thread titles, bodies, and comments
-        subreddit: Filter by subreddit name (without r/ prefix)
-        min_score: Minimum Reddit score (upvotes)
+        subreddit: Filter by subreddit/board name (without r/ prefix)
+        platform: Filter by source platform — "reddit" or "shopify_community".
+            Omit to search across all platforms.
+        min_score: Minimum score (Reddit upvotes, or Shopify Community like_count)
         participation_priority: Filter by priority — urgent, high, medium, low, skip
         participation_status: Filter by status — not_engaged, engaged, originated
         has_competitor: Filter for threads mentioning a specific competitor
@@ -283,6 +490,7 @@ async def reddit_search(
     threads = search_threads(
         query=query,
         subreddit=subreddit,
+        platform=platform,
         min_score=min_score,
         participation_priority=participation_priority,
         participation_status=participation_status,
@@ -295,6 +503,7 @@ async def reddit_search(
     for t in threads:
         entry = {
             "thread_id": t["thread_id"],
+            "platform": t.get("platform", "reddit"),
             "subreddit": t["subreddit"],
             "title": t["title"],
             "score": t["score"],
@@ -333,8 +542,9 @@ async def reddit_search(
 async def reddit_classify(
     thread_ids: Optional[list[str]] = None,
     batch_size: int = 10,
+    platform: Optional[str] = None,
 ) -> str:
-    """Classify Reddit threads using Claude with grounding docs.
+    """Classify community threads (Reddit or Shopify Community) using Claude with grounding docs.
 
     Injects competitive_positioning, icp_personas, and geo_content_strategy
     grounding docs into the classification prompt for strategically-aligned results.
@@ -343,11 +553,14 @@ async def reddit_classify(
         thread_ids: Specific thread IDs to classify. If omitted, classifies
             next batch of unclassified threads.
         batch_size: Number of threads to classify (1-25). Ignored if thread_ids provided.
+        platform: Restrict the batch to this platform ("reddit",
+            "shopify_community"). Ignored if thread_ids is given. Omit to
+            pull unclassified threads across all platforms.
 
     Returns:
         JSON summary with classified count, topics, and priorities
     """
-    result = classify_batch(batch_size=batch_size, thread_ids=thread_ids)
+    result = classify_batch(batch_size=batch_size, thread_ids=thread_ids, platform=platform)
     return json.dumps(result, indent=2)
 
 
@@ -363,42 +576,66 @@ async def reddit_classify(
 )
 async def reddit_subreddit_profile(
     subreddit: str,
+    platform: str = "reddit",
     include_reddit_metadata: bool = True,
 ) -> str:
-    """Build a profile of a subreddit to inform participation strategy.
+    """Build a profile of a subreddit/board to inform participation strategy.
 
     Merges two data sources:
     - Aggregated stats from our DB: topic distribution, persona mix,
       competitor mentions with sentiment, top-scoring threads, sample
       low-scoring threads (for "what doesn't work here" signal).
-    - Live Reddit metadata: subscriber count, sidebar description,
-      moderator rules. Fetched via public JSON endpoints (no OAuth).
+    - Live metadata: subscriber count/sidebar/rules for Reddit, or
+      description/topic count for Shopify Community. Fetched via public
+      JSON endpoints (no auth).
 
-    Use this BEFORE generating a participation guide for a subreddit
+    Use this BEFORE generating a participation guide for a community
     you don't deeply know. The participation guide tool also auto-injects
     the DB portion of this profile, but calling it directly gives you
-    the live rules and sidebar too.
+    the live rules/description too.
 
     Args:
-        subreddit: Subreddit name (without r/ prefix)
-        include_reddit_metadata: If True (default), fetch live subscriber
-            count, sidebar description, and rules from Reddit. Set False
-            to skip network calls and use only DB-aggregated data.
+        subreddit: Subreddit/board name (without r/ prefix)
+        platform: "reddit" (default) or "shopify_community"
+        include_reddit_metadata: If True (default), fetch live metadata
+            (subscriber count/rules for Reddit, description/topic count for
+            Shopify Community). Set False to skip network calls and use
+            only DB-aggregated data.
 
     Returns:
         JSON with the merged profile.
     """
-    profile = get_subreddit_profile_data(subreddit)
+    profile = get_subreddit_profile_data(subreddit, platform=platform)
     if include_reddit_metadata:
-        scraper = RedditScraper()
-        try:
-            profile["live_reddit_metadata"] = scraper.fetch_subreddit_metadata(
-                subreddit
-            )
-        except Exception as e:
-            profile["live_reddit_metadata_error"] = str(e)
-        finally:
-            scraper.close()
+        if platform == "shopify_community":
+            category_id = SHOPIFY_DEFAULT_CATEGORIES.get(subreddit)
+            if category_id is None:
+                profile["live_metadata_error"] = (
+                    f"Unknown category slug '{subreddit}' — not in "
+                    "SHOPIFY_DEFAULT_CATEGORIES, so its category_id isn't known. "
+                    "Pass include_reddit_metadata=False or look up the id via "
+                    "categories.json."
+                )
+            else:
+                scraper = ShopifyCommunityScraper()
+                try:
+                    profile["live_metadata"] = scraper.fetch_category_metadata(
+                        subreddit, category_id
+                    )
+                except Exception as e:
+                    profile["live_metadata_error"] = str(e)
+                finally:
+                    scraper.close()
+        else:
+            scraper = RedditScraper()
+            try:
+                profile["live_metadata"] = scraper.fetch_subreddit_metadata(
+                    subreddit
+                )
+            except Exception as e:
+                profile["live_metadata_error"] = str(e)
+            finally:
+                scraper.close()
     return json.dumps(profile, indent=2, default=str)
 
 
@@ -416,8 +653,9 @@ async def reddit_purge_offtopic(
     keep_subreddits: list[str],
     protect_priorities: Optional[list[str]] = None,
     dry_run: bool = True,
+    platform: Optional[str] = None,
 ) -> str:
-    """Delete threads from subreddits not in your allowlist.
+    """Delete threads from subreddits/boards not in your allowlist.
 
     Use this to clean up noise from broad keyword searches that pulled
     threads from unrelated subreddits (e.g. a search for "financing" that
@@ -431,13 +669,17 @@ async def reddit_purge_offtopic(
     Only set dry_run=False after reviewing the preview.
 
     Args:
-        keep_subreddits: Subreddits to keep (e.g. ["AmazonSeller",
+        keep_subreddits: Subreddits/boards to keep (e.g. ["AmazonSeller",
             "FulfillmentByAmazon", "ecommerce", "smallbusiness",
             "Entrepreneur", "shopify"]). Names are case-insensitive and
             the "r/" prefix is stripped.
         protect_priorities: Priorities that protect a thread from deletion
             even if it's off-topic. Default: ["urgent", "high"].
         dry_run: If True (default), preview only. Set False to actually delete.
+        platform: Restrict the purge to this platform ("reddit" or
+            "shopify_community"). Strongly recommended — omitting it considers
+            all platforms at once, so a board name that happens to match a
+            subreddit name on the other platform could be purged unintentionally.
 
     Returns:
         JSON summary with deleted/would-delete counts, per-subreddit
@@ -447,6 +689,7 @@ async def reddit_purge_offtopic(
         keep_subreddits=keep_subreddits,
         protect_priorities=protect_priorities,
         dry_run=dry_run,
+        platform=platform,
     )
     return json.dumps(result, indent=2)
 
@@ -463,19 +706,22 @@ async def reddit_purge_offtopic(
 )
 async def reddit_stats(
     subreddit: Optional[str] = None,
+    platform: Optional[str] = None,
 ) -> str:
-    """Get statistics about Reddit data in the database.
+    """Get statistics about community data in the database (Reddit + Shopify Community).
 
-    Shows total threads, breakdown by subreddit, classification status,
-    participation priorities, and engagement status.
+    Shows total threads, breakdown by platform and subreddit/board,
+    classification status, participation priorities, and engagement status.
 
     Args:
-        subreddit: Optional filter to show stats for a specific subreddit
+        subreddit: Optional filter to show stats for a specific subreddit/board
+        platform: Optional filter — "reddit" or "shopify_community". Omit
+            for combined stats across both.
 
     Returns:
         JSON with aggregate statistics
     """
-    stats = get_stats(subreddit=subreddit)
+    stats = get_stats(subreddit=subreddit, platform=platform)
     return json.dumps(stats, indent=2)
 
 

@@ -1,6 +1,6 @@
 # Onramp Funds Reddit Intelligence MCP Server
 
-Reddit market intelligence, participation guidance, and GEO optimization for Onramp Funds — revenue-based financing for ecommerce sellers.
+Reddit market intelligence, participation guidance, and GEO optimization for Onramp Funds — revenue-based financing for ecommerce sellers. Also covers Shopify Community (community.shopify.com) as a second platform.
 
 **For deployment + connecting Claude to this MCP, see [HANDOFF.md](./HANDOFF.md).**
 
@@ -23,13 +23,41 @@ python server_remote.py
 
 ## Grounding Documents
 
-The MCP relies on six grounding documents injected into classification and response prompts. They live in `grounding_docs/` and are loaded into the database by `seed_grounding_docs.py`:
+The MCP relies on seven grounding documents injected into classification and response prompts. They live in `grounding_docs/` and are loaded into the database by `seed_grounding_docs.py`:
 
 - `competitive_positioning` — Onramp vs. Payability, Wayflyer, Parker, 8fig, Clearco, etc.
 - `voice_tone` — Onramp's brand voice and Reddit posting style
 - `reddit_engagement_rules` — Do/don't rules for engaging on Reddit
+- `shopify_community_engagement_rules` — Do/don't rules for engaging on Shopify Community (materially different from Reddit's — self-promotion is board-restricted)
 - `product_messaging` — Product capabilities and approved messaging
 - `icp_personas` — Target seller personas (Amazon FBA, multi-channel, DTC, etc.)
 - `geo_content_strategy` — Target narratives and queries to win in AI search
 
-Edit the markdown files directly and re-run `python seed_grounding_docs.py` to update. The docs contain `[VERIFY: ...]` markers where Onramp internal confirmation is needed before public Reddit use.
+Edit the markdown files directly and re-run `python seed_grounding_docs.py` to update. The docs contain `[VERIFY: ...]` markers where Onramp internal confirmation is needed before public use.
+
+## Shopify Community (community.shopify.com)
+
+A second platform alongside Reddit, added because it directly serves the
+`shopify_store_owner` and `dtc_brand_owner` ICP personas and is technically
+similar to Reddit's public-read model: it's a Discourse forum, and Discourse
+exposes read data as JSON with no auth required.
+
+**Key difference from Reddit: no keyword search.** `robots.txt` explicitly
+disallows `/search` (and topic/category RSS) on this forum, so there's no
+Shopify equivalent of `reddit_ingest`'s keyword-search phase. Discovery is:
+- `shopify_ingest` — category/board browsing (compliant `.json` endpoints), or
+- `shopify_ingest_urls` — feed in specific thread URLs found via external
+  search (Google `site:community.shopify.com`, Ahrefs, peec.ai exports),
+  the same pattern `reddit_ingest_urls` already uses.
+
+**Key difference from Reddit: stricter, platform-enforced self-promotion
+rules.** Shopify's own community guidelines restrict product/service
+mentions to the "Ask & Offer" board. See `shopify_community_engagement_rules.md`
+for the full detail — `reddit_participation_guide` and `reddit_classify`
+automatically pick the correct engagement-rules doc based on the thread's
+platform. Thread origination (`reddit_thread_suggest`) stays Reddit-only;
+unprompted topic creation doesn't fit Shopify Community's stricter policy.
+
+Most tools that accept a `subreddit` argument also accept an optional
+`platform` argument (`"reddit"` or `"shopify_community"`) to scope the
+operation to one platform.
