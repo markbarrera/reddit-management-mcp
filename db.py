@@ -163,6 +163,12 @@ def upsert_thread(thread: dict) -> bool:
         peec_update += ", peec_competitors = excluded.peec_competitors"
 
     try:
+        # last_insert_rowid() only advances on a genuine INSERT — the
+        # ON CONFLICT DO UPDATE branch below leaves it unchanged. changes()
+        # is NOT usable to tell new vs. updated apart here: it returns 1 for
+        # both the insert and the conflict-triggered update, since either
+        # way exactly one row was touched by the statement.
+        rowid_before = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         conn.execute(f"""
             INSERT INTO reddit_threads
                 (thread_id, platform, subreddit, title, body, author, url, permalink,
@@ -189,9 +195,8 @@ def upsert_thread(thread: dict) -> bool:
             comments_json, full_text, word_count,
             citation_count or 0, ai_mentioned or "unknown", peec_competitors,
         ))
-        is_new = conn.execute(
-            "SELECT changes()"
-        ).fetchone()[0] > 0
+        rowid_after = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        is_new = rowid_after != rowid_before
         conn.commit()
         return is_new
     except Exception as e:
